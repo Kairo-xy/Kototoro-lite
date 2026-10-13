@@ -22,6 +22,8 @@ struct ReaderPreferences: Codable, Equatable {
     var floatingActions = ["bookmark"]
     var tapZones = true
     var reverseTaps = false
+    var keepScreenOn = true
+    var horizontalReversed = false
 
     init() {}
 
@@ -46,7 +48,19 @@ struct ReaderPreferences: Codable, Equatable {
         floatingActions = try container.decodeIfPresent([String].self, forKey: .floatingActions) ?? ["bookmark"]
         tapZones = try container.decodeIfPresent(Bool.self, forKey: .tapZones) ?? true
         reverseTaps = try container.decodeIfPresent(Bool.self, forKey: .reverseTaps) ?? false
+        keepScreenOn = try container.decodeIfPresent(Bool.self, forKey: .keepScreenOn) ?? true
+        // Existing horizontal works used RTL before the independent direction setting was introduced.
+        horizontalReversed = try container.decodeIfPresent(Bool.self, forKey: .horizontalReversed) ?? (mode == 4)
     }
+
+    func hasSameLayout(as other: ReaderPreferences) -> Bool {
+        mode == other.mode && fit == other.fit && doublePage == other.doublePage && cover == other.cover &&
+            splitWidePages == other.splitWidePages &&
+            (mode != 4 || horizontalReversed == other.horizontalReversed)
+    }
+
+    var readsRightToLeft: Bool { mode == 1 || mode == 4 && horizontalReversed }
+    var continuousForwardSign: CGFloat { mode == 4 && horizontalReversed ? -1 : 1 }
 }
 
 /// Work-specific settings override a user-controlled global default.

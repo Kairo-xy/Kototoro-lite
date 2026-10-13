@@ -3,6 +3,18 @@ import Foundation
 import XCTest
 
 final class SourceImageFileTests: XCTestCase {
+    func testLongPageTilePlacementScalesSourcePixelsAndClipsSamplingGutter() {
+        let layout = SourceImageFile.tileLayout(
+            logical: CGRect(x: 0, y: 2048, width: 2000, height: 2048),
+            decoded: CGRect(x: 0, y: 2016, width: 2000, height: 2112),
+            sourceSize: CGSize(width: 2000, height: 12000),
+            displaySize: CGSize(width: 500, height: 3000)
+        )
+        XCTAssertEqual(layout.frame, CGRect(x: 0, y: 512, width: 500, height: 512))
+        XCTAssertEqual(layout.decodedSize, CGSize(width: 500, height: 528))
+        XCTAssertEqual(layout.decodedOffset, CGSize(width: 0, height: -8))
+    }
+
     func testDecodeAndRejectTamperedArtifacts() throws {
         let files = FileManager.default
         let directory = files.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)

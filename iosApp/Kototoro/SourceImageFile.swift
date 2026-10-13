@@ -5,6 +5,25 @@ import UIKit
 
 /// Decode only the immutable host artifact; networking and source interceptors stay in source-host.
 enum SourceImageFile {
+    struct TileLayout {
+        let frame: CGRect
+        let decodedSize: CGSize
+        let decodedOffset: CGSize
+    }
+
+    /// Source-space tiles include a sampling gutter; clip it after scaling to the page's point-space placement.
+    static func tileLayout(logical: CGRect, decoded: CGRect, sourceSize: CGSize, displaySize: CGSize) -> TileLayout {
+        let scaleX = displaySize.width / max(1, sourceSize.width)
+        let scaleY = displaySize.height / max(1, sourceSize.height)
+        return TileLayout(
+            frame: CGRect(x: logical.minX * scaleX, y: logical.minY * scaleY,
+                          width: logical.width * scaleX, height: logical.height * scaleY),
+            decodedSize: CGSize(width: decoded.width * scaleX, height: decoded.height * scaleY),
+            decodedOffset: CGSize(width: (decoded.minX - logical.minX) * scaleX,
+                                  height: (decoded.minY - logical.minY) * scaleY)
+        )
+    }
+
     static func decode(directory: URL, relativePath: String, sha256: String, byteSize: Int64,
                        maxPixelSize: Int = 4096) throws -> UIImage {
         try decode(data: validatedData(directory: directory, relativePath: relativePath, sha256: sha256,

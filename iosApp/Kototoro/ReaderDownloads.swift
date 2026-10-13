@@ -5,15 +5,8 @@ import KototoroShared
 import UIKit
 
 enum ReaderDownloads {
-    private struct ImageRecord: Codable {
-        let path: String
-        let hash: String
-        let bytes: Int64
-    }
-    private struct Manifest: Codable {
-        let pages: String
-        let images: [ImageRecord]
-    }
+    private typealias ImageRecord = ReaderDownloadStore.ImageRecord
+    private typealias Manifest = ReaderDownloadStore.Manifest
     static func directory(content: IosSourceContent, chapter: IosSourceChapter) throws -> URL {
         let root = try NativeSourceTransport.dataDirectory.appendingPathComponent("downloads", isDirectory: true)
         let identity = content.id + ":" + chapter.id
@@ -23,21 +16,55 @@ enum ReaderDownloads {
     static func isDownloaded(content: IosSourceContent, chapter: IosSourceChapter) -> Bool {
         guard let dir = try? directory(content: content, chapter: chapter) else { return false }
         let manifest = content.mediaKind == "NOVEL" ? NovelDownloads.manifestName : "chapter.json"
+        if content.mediaKind != "NOVEL" && ReaderDownloadStore.isKnownInvalid(in: dir) { return false }
         return FileManager.default.fileExists(atPath: dir.appendingPathComponent(manifest).path)
     }
     static func pages(runtime: IosSources, content: IosSourceContent, chapter: IosSourceChapter) async throws -> [IosSourcePage] {
-        if let manifest = try manifest(content: content, chapter: chapter) {
-            return try IosPageArchive().decode(json: manifest.pages)
+        let dir = try directory(content: content, chapter: chapter)
+        do {
+            if let manifest = try await ReaderDownloadStore.shared.read(in: dir) {
+                let pages = try IosPageArchive().decode(json: manifest.pages)
+                guard !pages.isEmpty, pages.count == manifest.images.count else {
+                    throw ReaderDownloadStore.Failure.invalidManifest
+                }
+                return pages
+            }
+        } catch {
+            try Task.checkCancellation()
+            await ReaderDownloadStore.shared.invalidate(dir)
         }
         return try await runtime.pages(chapter: chapter)
     }
     static func loadedPage(runtime: IosSources, content: IosSourceContent, chapter: IosSourceChapter,
                            page: IosSourcePage, index: Int, cropMargins: Bool = false) async throws -> ReaderLoadedPage {
-        if let manifest = try manifest(content: content, chapter: chapter), manifest.images.indices.contains(index) {
+        let dir = try directory(content: content, chapter: chapter)
+        let manifest = try? await ReaderDownloadStore.shared.read(in: dir)
+        try Task.checkCancellation()
+        if let manifest, manifest.images.indices.contains(index) {
             let record = manifest.images[index]
-            let dir = try directory(content: content, chapter: chapter)
-            return try await ReaderImageArtifact.load(directory: dir, relativePath: record.path,
-                                                      sha256: record.hash, byteSize: record.bytes, cropMargins: cropMargins)
+            do {
+                return try await ReaderImageArtifact.load(directory: dir, relativePath: record.path,
+                                                         sha256: record.hash, byteSize: record.bytes,
+                                                         cropMargins: cropMargins)
+            } catch {
+                try Task.checkCancellation()
+                // Only this page is re-fetched; keep all other verified offline files and the original request context.
+                let fetched = try await runtime.image(page: page)
+                let loaded = try await fetched.loadedPage(cropMargins: cropMargins)
+                let replacement = ImageRecord(path: fetched.relativePath, hash: fetched.sha256, bytes: fetched.byteSize)
+                if try await ReaderDownloadStore.shared.repairImage(
+                    in: dir, index: index, expected: manifest, replacement: replacement,
+                    sourceDirectory: loaded.artifact.directory
+                ) {
+                    let artifact = loaded.artifact
+                    return ReaderLoadedPage(image: loaded.image, artifact: ReaderImageArtifact(
+                        directory: dir, relativePath: artifact.relativePath, sha256: artifact.sha256,
+                        byteSize: artifact.byteSize, encodedWidth: artifact.encodedWidth,
+                        encodedHeight: artifact.encodedHeight, tiled: artifact.tiled
+                    ))
+                }
+                return loaded
+            }
         }
         return try await runtime.image(page: page).loadedPage(cropMargins: cropMargins)
     }
@@ -56,7 +83,7 @@ enum ReaderDownloads {
         let dir = try directory(content: content, chapter: chapter)
         let partial = dir.appendingPathComponent("partial.json")
         var saved: Manifest?
-        if let complete = try? manifest(content: content, chapter: chapter) {
+        if let complete = try? await ReaderDownloadStore.shared.read(in: dir) {
             saved = complete
         } else if FileManager.default.fileExists(atPath: partial.path) {
             saved = try? JSONDecoder().decode(Manifest.self, from: Data(contentsOf: partial))
@@ -75,7 +102,7 @@ enum ReaderDownloads {
         let store = try NativeSourceTransport.dataDirectory.appendingPathComponent("images", isDirectory: true)
         let archive = IosPageArchive().encode(pages: pages)
         if saved == nil {
-            try JSONEncoder().encode(Manifest(pages: archive, images: [])).write(to: partial, options: .atomic)
+            try await ReaderDownloadStore.shared.write(Manifest(pages: archive, images: []), in: dir, name: "partial.json")
         }
         var records: [ImageRecord] = []
         try progress(0, pages.count)
@@ -108,23 +135,18 @@ enum ReaderDownloads {
             records.append(record)
             // Keep the saved suffix until it is revalidated, so another interruption does not lose its checkpoint.
             let checkpointRecords = records + (saved.map { Array($0.images.dropFirst(records.count)) } ?? [])
-            let checkpoint = try JSONEncoder().encode(Manifest(pages: archive, images: checkpointRecords))
-            try await Task.detached(priority: .utility) { try checkpoint.write(to: partial, options: .atomic) }.value
+            try await ReaderDownloadStore.shared.write(Manifest(pages: archive, images: checkpointRecords),
+                                                       in: dir, name: "partial.json")
             try Task.checkCancellation()
             try progress(records.count, pages.count)
         }
         try Task.checkCancellation()
         let value = Manifest(pages: archive, images: records)
-        try JSONEncoder().encode(value).write(to: dir.appendingPathComponent("chapter.json"), options: .atomic)
+        try await ReaderDownloadStore.shared.write(value, in: dir)
     }
     static func remove(content: IosSourceContent, chapter: IosSourceChapter) throws {
         let dir = try directory(content: content, chapter: chapter)
         if FileManager.default.fileExists(atPath: dir.path) { try FileManager.default.removeItem(at: dir) }
-    }
-    private static func manifest(content: IosSourceContent, chapter: IosSourceChapter) throws -> Manifest? {
-        let file = try directory(content: content, chapter: chapter).appendingPathComponent("chapter.json")
-        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
-        return try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: file))
     }
 }
 

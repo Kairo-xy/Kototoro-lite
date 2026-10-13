@@ -11,7 +11,10 @@ data class IosReaderPlacement(
     val segment: Int = 0,
 )
 data class IosReaderSlot(val index: Int, val anchor: Int, val placements: List<IosReaderPlacement>)
+/** Stable chapter-local identity, independent of its current index in the scene window. */
+data class IosReaderPage(val chapterId: String, val index: Int)
 data class IosReaderProgress(val index: Int, val offset: Float)
+data class IosReaderViewport(val x: Float, val y: Float)
 data class IosReaderSize(val width: Int, val height: Int)
 data class IosReaderRect(val left: Int, val top: Int, val width: Int, val height: Int)
 data class IosReaderTile(
@@ -55,11 +58,13 @@ class IosReader {
     private val sizes = mutableMapOf<Int, PageGeometryHint>()
     private val specLookup = mutableMapOf<Long, Pair<Int, Int>>()
     private var count = 0
+    private var pageKeys: List<IosReaderPage> = emptyList()
     private var mode = 0
     private var doublePage = false
     private var cover = false
     private var fit = 0
     private var splitWide = false
+    private var horizontalReversed = false
     /** Continuous modes' cross-axis zoom: the strip is laid out this many times wider (taller for mode 4). */
     private var zoom = 1f
 
@@ -75,11 +80,39 @@ class IosReader {
         cover: Boolean,
         fit: Int,
         splitWide: Boolean,
+    ) = configure(count, width, height, mode, doublePage, cover, fit, splitWide, false)
+
+    fun configure(
+        count: Int,
+        width: Int,
+        height: Int,
+        mode: Int,
+        doublePage: Boolean,
+        cover: Boolean,
+        fit: Int,
+        splitWide: Boolean,
+        horizontalReversed: Boolean,
     ) {
         require(count >= 0)
         this.count = count; this.width = width.coerceAtLeast(1); this.height = height.coerceAtLeast(1)
         this.mode = mode; this.doublePage = doublePage; this.cover = cover; this.fit = fit; this.splitWide = splitWide
+        this.horizontalReversed = horizontalReversed
         sizes.keys.retainAll(0 until count)
+        if (pageKeys.size != count) pageKeys = emptyList()
+        rebuild()
+    }
+
+    fun chapterWindow(
+        previous: List<IosReaderPage>, current: List<IosReaderPage>, next: List<IosReaderPage>, adjacentPageCount: Int,
+    ): List<IosReaderPage> = ReaderChapterWindow.pages(previous, current, next, adjacentPageCount)
+
+    /** Retains measured dimensions by identity when adjacent pages prepend or the active chapter changes. */
+    fun setPages(pages: List<IosReaderPage>) {
+        val measured = pageKeys.mapIndexedNotNull { index, key -> sizes[index]?.let { key to it } }.toMap()
+        sizes.clear()
+        pages.forEachIndexed { index, key -> measured[key]?.let { sizes[index] = it } }
+        pageKeys = pages.toList()
+        count = pages.size
         rebuild()
     }
 
@@ -95,31 +128,50 @@ class IosReader {
         if (mode >= 3) rebuild()
     }
 
-    fun reset() { sizes.clear(); specLookup.clear(); scene = null; count = 0 }
+    fun reset() { sizes.clear(); specLookup.clear(); pageKeys = emptyList(); scene = null; count = 0 }
 
     fun setImageSize(index: Int, width: Int, height: Int) {
-        if (index !in 0 until count || width <= 0 || height <= 0) return
+        updateImageSize(index, width, height, null)
+    }
+
+    /** Returns the compensated continuous viewport when a late image size changes the strip layout. */
+    fun setImageSize(index: Int, width: Int, height: Int, viewportX: Float, viewportY: Float): IosReaderViewport? =
+        updateImageSize(index, width, height, ReaderViewport(
+            FloatRect.fromLtwh(viewportX, viewportY, this.width.toFloat(), this.height.toFloat()),
+        ))
+
+    private fun updateImageSize(index: Int, width: Int, height: Int, viewport: ReaderViewport?): IosReaderViewport? {
+        if (index !in 0 until count || width <= 0 || height <= 0) return null
         val hint = PageGeometryHint.Exact(width, height)
-        if (sizes[index] == hint) return
+        if (sizes[index] == hint) return null
         sizes[index] = hint
         if (splitWide && !doublePage && mode < 3) {
             rebuild()
         } else {
-            scene?.updatePageHint(PageId(index.toLong()), hint)
+            val compensation = scene?.updatePageHint(PageId(index.toLong()), hint, viewport)
+            if (mode >= 3 && compensation != null) {
+                val bounds = compensation.compensatedViewport.bounds
+                return IosReaderViewport(bounds.left, bounds.top)
+            }
         }
+        return null
     }
 
     private fun rebuild() {
         specLookup.clear()
         val pages = (0 until count).map { PageId(it.toLong()) to (sizes[it] ?: PageGeometryHint.Estimated(0.7f)) }
-        val direction = if (mode == 1 || mode == 4) SceneReadingDirection.RIGHT_TO_LEFT else
+        val direction = if (mode == 1 || mode == 4 && horizontalReversed) SceneReadingDirection.RIGHT_TO_LEFT else
             if (mode == 2 || mode == 3) SceneReadingDirection.TOP_TO_BOTTOM else SceneReadingDirection.LEFT_TO_RIGHT
         scene = when (mode) {
             3 -> VerticalReaderScene(zoomed(width), height, pages)
             4 -> HorizontalReaderScene(zoomed(height), width, pages, readingDirection = direction)
             else -> {
                 val specs = mutableListOf<PagedPageSpec>()
+                val chapterIds = pageKeys.map { it.chapterId }.distinct().withIndex().associate { it.value to it.index.toLong() }
                 pages.forEachIndexed { index, (id, hint) ->
+                    val key = pageKeys.getOrNull(index)
+                    val chapterId = key?.let { chapterIds.getValue(it.chapterId) } ?: 0L
+                    val chapterIndex = key?.index ?: index
                     if (splitWide && !doublePage && hint is PageGeometryHint.Exact && WidePagePolicy.isWidePage(hint)) {
                         val halfHint = PageGeometryHint.Exact((hint.width / 2).coerceAtLeast(1), hint.height)
                         val firstSeg = if (mode == 1) PageSegment.RIGHT_HALF else PageSegment.LEFT_HALF
@@ -129,11 +181,11 @@ class IosReader {
                         val secondId = PageId((count + index).toLong())
                         specLookup[id.value] = index to firstCode
                         specLookup[secondId.value] = index to secondCode
-                        specs += PagedPageSpec(id, halfHint, 0L, specs.size, segment = firstSeg)
-                        specs += PagedPageSpec(secondId, halfHint, 0L, specs.size, segment = secondSeg)
+                        specs += PagedPageSpec(id, halfHint, chapterId, chapterIndex, segment = firstSeg)
+                        specs += PagedPageSpec(secondId, halfHint, chapterId, chapterIndex, segment = secondSeg)
                     } else {
                         specLookup[id.value] = index to 0
-                        specs += PagedPageSpec(id, hint, 0L, specs.size)
+                        specs += PagedPageSpec(id, hint, chapterId, chapterIndex)
                     }
                 }
                 PagedReaderScene(width, height,
@@ -211,22 +263,35 @@ class IosReader {
         encodedWidth: Int,
         encodedHeight: Int,
         displayScale: Float,
+    ): List<IosReaderTile> = visibleTiles(x, y, index, encodedWidth, encodedHeight, displayScale, 1f)
+
+    /** Pixel density affects sampling only; camera zoom independently determines the visible source region. */
+    fun visibleTiles(
+        x: Float,
+        y: Float,
+        index: Int,
+        encodedWidth: Int,
+        encodedHeight: Int,
+        displayScale: Float,
+        zoomScale: Float,
     ): List<IosReaderTile> {
         if (index !in 0 until count || encodedWidth <= 0 || encodedHeight <= 0) return emptyList()
         val current = scene ?: return emptyList()
-        val scale = displayScale.coerceAtLeast(1f)
+        val density = displayScale.coerceAtLeast(1f)
+        val cameraScale = zoomScale.coerceAtLeast(1f)
         val node = if (current is PagedReaderScene) {
             val slot = current.allSlots.firstOrNull { s ->
                 s.placements.any { (specLookup[it.pageId.value]?.first ?: it.pageId.value.toInt()) == index }
            }
-            slot?.visibleContentNodes(scale, x, y)?.firstOrNull {
+            slot?.visibleContentNodes(cameraScale, x, y)?.firstOrNull {
                 (specLookup[it.pageId.value]?.first ?: it.pageId.value.toInt()) == index
             }
         } else {
             val frame = current.resolve(ReaderViewport(FloatRect.fromLtwh(x, y, width.toFloat(), height.toFloat())))
             frame.visibleNodes.firstOrNull { it.pageId.value.toInt() == index }
         } ?: return emptyList()
-        return VisibleImageTiles.resolve(node, IntSize(encodedWidth, encodedHeight), scale).map { spec ->
+        val pixelScale = density * if (current is PagedReaderScene) cameraScale else 1f
+        return VisibleImageTiles.resolve(node, IntSize(encodedWidth, encodedHeight), pixelScale).map { spec ->
             IosReaderTile(
                 row = spec.key.row,
                 col = spec.key.col,

@@ -65,6 +65,34 @@ xcodebuild -project "iosApp/Kototoro.xcodeproj" -scheme "Kototoro" \
 Native 测试覆盖数据库重开、空标题拒绝、分类排序／可见性及备份恢复；XCTest 覆盖 SwiftUI 分类操作及重启读取。
 来源“最近使用”读取共享使用时间，“使用频率”沿用 Android 的本地作品记录数，重复打开同一作品不累加。
 来源“新”标记读取共享加入版本；首次目录建立基线，之后新增来源记录 iOS 构建版本。
+
+漫画阅读器定向回归：`SourceImageFileTests` 验证分块缩放和采样边缘，`ImageLoadPolicyTests` 验证请求优先级与取消；
+先执行 `python3 "iosApp/Scripts/stage-picker-fixtures.py" <UUID>`，再运行
+`LocalImportTests/testLongPageBookmarkRestoresItsOffset` 和
+`LocalImportTests/testNeighbourFailureDoesNotHideReadablePageAndRetriesTheFailedPage`，覆盖长页书签和坏邻页。
+Native 的 `IosProductTest` 覆盖 Retina 密度与相机缩放分离、晚到尺寸的阅读锚点补偿。
+`ReaderDownloadStoreTests` 覆盖离线清单缓存、坏清单标记、图片替换及页序变更保护；
+`LocalImportTests/testContinuousAutoScrollAdvancesToTheNextChapter` 验证纵向条漫自动跨章，
+`LocalImportTests/testDisplayPreferenceAndBackgroundPreserveTheLongPagePosition` 验证常亮设置不重排长页、后台保存与重启续读。
+离线修复验证需顺序执行 `testPrepareDownloadedReaderFixture`、篡改专用 `fixture_reader_download` 的一张下载副本、
+再执行 `testDownloadedReaderFixtureReopensAfterImageRepair`；最后核对副本的长度与 SHA-256 已恢复。
+仅修改该测试作品的下载副本，保留导入源与全局图片缓存；两个 UI 用例单独通过不能证明修复链路。
+横向条漫支持独立的“横向连续从右到左”设置，以及捏合／双击缩放、放大后的双轴平移。
+新作品默认从左到右，旧横向设置保持原有从右到左方向。定向回归：`ReaderSettingsTests`、
+`LocalImportTests/testHorizontalContinuousDirectionZoomAndBookmarkRestore` 和
+`LocalImportTests/testHorizontalReverseAutoScrollAdvancesToTheNextChapter`，需先暂存上述 picker 夹具。
+`IosProductTest` 另覆盖横向 LTR/RTL 定位、缩放无关的页内偏移、晚到尺寸补偿及物理视口分块。
+分页跨章复用 Android 提取到 `reader-core` 的章节窗口规则：前章末两页、本章、后章前两页。
+普通翻页直接进入邻章页，并按页面归属更新章节；进度条、书签和历史仍使用章内页码。
+定向回归：`LocalImportTests/testPagedWindowChangesChapterAndStopsAtTheBookEnds`、
+`LocalImportTests/testRtlPagedAndAnimatedWindowsChangeChapter`、
+`LocalImportTests/testPagedCrossChapterBookmarkKeepsChapterLocalPage`；之后顺序运行
+`LocalImportTests/testPagedCrossChapterHistoryReopensWithTheMatchingImage`，核对重新启动后的实际图片。
+`IosProductTest` 验证窗口裁剪后尺寸复用及双页章界隔离；
+`LocalImportTests/testPagedWindowTrimsNeighborsAndKeepsTheDisplayedChapter` 验证三章窗口裁剪后的实际图片，
+`LocalImportTests/testPreviousChapterButtonOpensTheChapterStart` 验证上一章按钮打开章首；
+向后翻页跨章进入上一章末页由三章窗口用例验证。两种导航契约与 Android 一致。
+连续模式的自然页面接续仍待实现，本轮分页跨章不依赖额外拉动。
 `testNewSourceBadgesFilterAndRestartPreserveBaseline` 使用两次独立导入验证基线、新标记、列表／网格及筛选重启恢复。
 CMS fixture 的 `usage-sites.json?run=<标识>` 提供两个不同身份的测试站点，用于首次访问保持手动顺序和使用排序验收。
 修改服务脚本后需重启本地 fixture 服务，再运行相应用例。

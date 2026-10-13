@@ -6,6 +6,7 @@ struct ReaderChapterPanel: View {
     @EnvironmentObject private var downloads: ReaderDownloadQueue
     let onJump: (Int) -> Void
     let onChapter: (IosSourceChapter) -> Void
+    let onBookmark: (IosBookmark) -> Void
     @State private var tab = 0
     @State private var query = ""
     @State private var branch: String?
@@ -96,11 +97,7 @@ struct ReaderChapterPanel: View {
                                 .localizedCaseInsensitiveContains(query)
                         }, id: \.id) { bookmark in
                             HStack {
-                                Button {
-                                    if let chapter = model.content.chapters.first(where: { $0.id == bookmark.chapterId }) {
-                                        Task { await model.moveChapter(chapter); onJump(Int(bookmark.index)) }
-                                    }
-                                } label: {
+                                Button { onBookmark(bookmark) } label: {
                                     VStack(alignment: .leading) {
                                         Text(model.content.chapters.first { $0.id == bookmark.chapterId }?.title ?? "章节")
                                         Text("第 \(bookmark.index + 1) 页").font(.caption).foregroundStyle(.secondary)
@@ -237,6 +234,10 @@ struct ReaderMorePanel: View {
                             Text("默认（从左到右）").tag(0); Text("从右到左").tag(1); Text("从上到下").tag(2)
                             Text("条漫").tag(3); Text("横向条漫（连续）").tag(4)
                         }
+                        if settings.value.mode == 4 {
+                            Toggle("横向连续从右到左", isOn: $settings.value.horizontalReversed)
+                                .accessibilityIdentifier("reader.option.horizontalReversed")
+                        }
                         Picker("缩放基准", selection: $settings.value.fit) {
                             Text("适应页面").tag(0); Text("适应宽度").tag(1); Text("适应高度").tag(2); Text("保持起始位置").tag(3)
                         }
@@ -261,6 +262,8 @@ struct ReaderMorePanel: View {
                         Text("亮度"); Slider(value: $settings.value.brightness, in: -0.5...0.5)
                         Text("对比度"); Slider(value: $settings.value.contrast, in: 0.5...2)
                     } else {
+                        Toggle("阅读时保持屏幕常亮", isOn: $settings.value.keepScreenOn)
+                            .accessibilityIdentifier("reader.option.keepScreenOn")
                         Toggle("右下角显示书签浮动按钮", isOn: $settings.value.bookmarkButton)
                             .disabled(!settings.value.bookmarkButton && settings.value.floatingActions.filter { $0 != "bookmark" }.count >= 4)
                         Text("浮动按钮最多四个").font(.caption).foregroundStyle(.secondary)

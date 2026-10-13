@@ -31,10 +31,13 @@ struct ReaderImageArtifact: Equatable, Sendable {
             return UIImage(cgImage: cropped)
         }
         // A base too large for the cache: decode just this tile.
-        let image = try await Task.detached(priority: .userInitiated) {
-            try SourceImageFile.decodeRegion(directory: dir, relativePath: path, sha256: hash,
-                                             byteSize: length, rect: rect, sampleSize: sample)
-        }.value
+        let decode = Task.detached(priority: .userInitiated) {
+            try await gated(RequestGate.readerDecoding) {
+                try SourceImageFile.decodeRegion(directory: dir, relativePath: path, sha256: hash,
+                                                 byteSize: length, rect: rect, sampleSize: sample)
+            }
+        }
+        let image = try await withTaskCancellationHandler { try await decode.value } onCancel: { decode.cancel() }
         try Task.checkCancellation()
         return image
     }
@@ -42,53 +45,56 @@ struct ReaderImageArtifact: Equatable, Sendable {
     static func load(directory: URL, relativePath: String, sha256: String,
                      byteSize: Int64, cropMargins: Bool = false) async throws -> ReaderLoadedPage {
         try Task.checkCancellation()
-        let loaded = try await Task.detached(priority: .userInitiated) { () throws -> ReaderLoadedPage in
-            // One read and hash for both the size and the decode.
-            let data = try SourceImageFile.validatedData(directory: directory, relativePath: relativePath,
-                                                         sha256: sha256, byteSize: byteSize)
-            let dims = try SourceImageFile.dimensions(data: data)
-            let reader = IosReader()
-            let resolved = reader.decodeSize(width: Int32(dims.width), height: Int32(dims.height))
-            let maxPixelSize = Int(max(resolved.width, resolved.height))
-            var image = try SourceImageFile.decode(data: data, maxPixelSize: maxPixelSize)
-            let tiled = reader.isTiled(width: Int32(dims.width), height: Int32(dims.height))
-            if cropMargins && !tiled, let cgImage = image.cgImage, cgImage.width >= 100, cgImage.height >= 100 {
-                let sample = Int(reader.edgeSampleSize(width: Int32(cgImage.width), height: Int32(cgImage.height)))
-                if let sampled = SourceImageFile.samplePixels(image, sampleSize: sample) {
-                    let kotlinPixels = KotlinIntArray(size: Int32(sampled.pixels.count))
-                    for (index, pixel) in sampled.pixels.enumerated() {
-                        kotlinPixels.set(index: Int32(index), value: pixel)
-                    }
-                    if let bounds = reader.contentBounds(
-                        width: Int32(cgImage.width),
-                        height: Int32(cgImage.height),
-                        sampleSize: Int32(sample),
-                        bitmapWidth: Int32(sampled.width),
-                        bitmapHeight: Int32(sampled.height),
-                        pixels: kotlinPixels
-                    ) {
-                        image = SourceImageFile.crop(image, rect: CGRect(
-                            x: Int(bounds.left), y: Int(bounds.top),
-                            width: Int(bounds.width), height: Int(bounds.height)
-                        ))
+        let decode = Task.detached(priority: .userInitiated) {
+            try await gated(RequestGate.readerDecoding) { () throws -> ReaderLoadedPage in
+                // One read and hash for both the size and the decode.
+                let data = try SourceImageFile.validatedData(directory: directory, relativePath: relativePath,
+                                                             sha256: sha256, byteSize: byteSize)
+                let dims = try SourceImageFile.dimensions(data: data)
+                let reader = IosReader()
+                let resolved = reader.decodeSize(width: Int32(dims.width), height: Int32(dims.height))
+                let maxPixelSize = Int(max(resolved.width, resolved.height))
+                var image = try SourceImageFile.decode(data: data, maxPixelSize: maxPixelSize)
+                let tiled = reader.isTiled(width: Int32(dims.width), height: Int32(dims.height))
+                if cropMargins && !tiled, let cgImage = image.cgImage, cgImage.width >= 100, cgImage.height >= 100 {
+                    let sample = Int(reader.edgeSampleSize(width: Int32(cgImage.width), height: Int32(cgImage.height)))
+                    if let sampled = SourceImageFile.samplePixels(image, sampleSize: sample) {
+                        let kotlinPixels = KotlinIntArray(size: Int32(sampled.pixels.count))
+                        for (index, pixel) in sampled.pixels.enumerated() {
+                            kotlinPixels.set(index: Int32(index), value: pixel)
+                        }
+                        if let bounds = reader.contentBounds(
+                            width: Int32(cgImage.width),
+                            height: Int32(cgImage.height),
+                            sampleSize: Int32(sample),
+                            bitmapWidth: Int32(sampled.width),
+                            bitmapHeight: Int32(sampled.height),
+                            pixels: kotlinPixels
+                        ) {
+                            image = SourceImageFile.crop(image, rect: CGRect(
+                                x: Int(bounds.left), y: Int(bounds.top),
+                                width: Int(bounds.width), height: Int(bounds.height)
+                            ))
+                        }
                     }
                 }
-            }
-            let width = tiled ? dims.width : Int(image.size.width)
-            let height = tiled ? dims.height : Int(image.size.height)
-            return ReaderLoadedPage(
-                image: image,
-                artifact: ReaderImageArtifact(
-                    directory: directory,
-                    relativePath: relativePath,
-                    sha256: sha256,
-                    byteSize: byteSize,
-                    encodedWidth: max(1, width),
-                    encodedHeight: max(1, height),
-                    tiled: tiled
+                let width = tiled ? dims.width : Int(image.size.width)
+                let height = tiled ? dims.height : Int(image.size.height)
+                return ReaderLoadedPage(
+                    image: image,
+                    artifact: ReaderImageArtifact(
+                        directory: directory,
+                        relativePath: relativePath,
+                        sha256: sha256,
+                        byteSize: byteSize,
+                        encodedWidth: max(1, width),
+                        encodedHeight: max(1, height),
+                        tiled: tiled
+                    )
                 )
-            )
-        }.value
+            }
+        }
+        let loaded = try await withTaskCancellationHandler { try await decode.value } onCancel: { decode.cancel() }
         try Task.checkCancellation()
         return loaded
     }
@@ -115,11 +121,13 @@ actor ReaderTileBaseCache {
     private var order: [Key] = []
     private var bytes = 0
     private var pending: [Key: Task<CGImage, Error>] = [:]
+    private var generation = 0
 
     /// The page decoded at 1/[sample] with its orientation applied, or nil when it would exceed the budget. A decode
     /// already under way is shared, and it finishes for the cache even if this caller is cancelled.
     func base(for artifact: ReaderImageArtifact, sample: Int) async throws -> CGImage? {
         let key = Key(sha256: artifact.sha256, sample: sample)
+        let token = generation
         if let image = entries[key] {
             order.removeAll { $0 == key }; order.append(key)
             return image
@@ -135,13 +143,15 @@ actor ReaderTileBaseCache {
             let hash = artifact.sha256, length = artifact.byteSize
             let maxPixelSize = max(width, height)
             task = Task.detached(priority: .userInitiated) {
-                let image = try SourceImageFile.decode(directory: directory, relativePath: path, sha256: hash,
-                                                       byteSize: length, maxPixelSize: maxPixelSize)
-                guard let cgImage = image.cgImage else {
-                    throw NSError(domain: "org.skepsun.kototoro.image", code: 1,
-                                  userInfo: [NSLocalizedDescriptionKey: "无法解码此图片格式"])
+                try await gated(RequestGate.readerDecoding) {
+                    let image = try SourceImageFile.decode(directory: directory, relativePath: path, sha256: hash,
+                                                           byteSize: length, maxPixelSize: maxPixelSize)
+                    guard let cgImage = image.cgImage else {
+                        throw NSError(domain: "org.skepsun.kototoro.image", code: 1,
+                                      userInfo: [NSLocalizedDescriptionKey: "无法解码此图片格式"])
+                    }
+                    return cgImage
                 }
-                return cgImage
             }
             pending[key] = task
         }
@@ -153,6 +163,7 @@ actor ReaderTileBaseCache {
             throw error
         }
         if pending[key] == task { pending[key] = nil }
+        guard generation == token else { throw CancellationError() }
         if entries[key] == nil {
             entries[key] = image
             order.append(key)
@@ -162,10 +173,14 @@ actor ReaderTileBaseCache {
                 if let evicted = entries.removeValue(forKey: oldest) { bytes -= evicted.bytesPerRow * evicted.height }
             }
         }
+        try Task.checkCancellation()
         return entries[key] ?? image
     }
 
     func clear() {
+        generation += 1
+        for task in pending.values { task.cancel() }
+        pending = [:]
         entries = [:]; order = []; bytes = 0
     }
 }

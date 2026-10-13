@@ -7,6 +7,11 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		FC0000000000000000000001 /* ReaderDownloadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0000000000000000000001 /* ReaderDownloadStore.swift */; };
+		FC0000000000000000000002 /* ReaderDownloadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0000000000000000000001 /* ReaderDownloadStore.swift */; };
+		FC0000000000000000000003 /* ReaderDownloadStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0000000000000000000002 /* ReaderDownloadStoreTests.swift */; };
+		FC0000000000000000000004 /* ReaderSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10000000000000000000002 /* ReaderSettings.swift */; };
+		FC0000000000000000000005 /* ReaderSettingsTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0000000000000000000003 /* ReaderSettingsTests.swift */; };
 		A00000000000000000000001 /* KototoroApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000011 /* KototoroApp.swift */; };
 		A00000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* ContentView.swift */; };
 		A00000000000000000000003 /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000013 /* LibraryModel.swift */; };
@@ -78,6 +83,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		FD0000000000000000000001 /* ReaderDownloadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderDownloadStore.swift; sourceTree = "<group>"; };
+		FD0000000000000000000002 /* ReaderDownloadStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderDownloadStoreTests.swift; sourceTree = "<group>"; };
+		FD0000000000000000000003 /* ReaderSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderSettingsTests.swift; sourceTree = "<group>"; };
 		A00000000000000000000011 /* KototoroApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KototoroApp.swift; sourceTree = "<group>"; };
 		A00000000000000000000012 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A00000000000000000000013 /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModel.swift; sourceTree = "<group>"; };
@@ -181,6 +189,7 @@
 				F50000000000000000000002 /* ExtensionPresentation.swift */,
 				F30000000000000000000001 /* ReaderDownloadQueue.swift */,
 				FB0000000000000000000001 /* ImageLoadPolicy.swift */,
+				FD0000000000000000000001 /* ReaderDownloadStore.swift */,
 				FB0000000000000000000005 /* ContinueReading.swift */,
 				FB0000000000000000000008 /* SourceWebBrowser.swift */,
 				FB0000000000000000000007 /* SourceSettingsView.swift */,
@@ -225,6 +234,8 @@
 				A00000000000000000000014 /* LibraryPersistenceTests.swift */,
 				B00000000000000000000014 /* SourceRuntimeTests.swift */,
 				C00000000000000000000015 /* SourceImageFileTests.swift */,
+				FD0000000000000000000002 /* ReaderDownloadStoreTests.swift */,
+				FD0000000000000000000003 /* ReaderSettingsTests.swift */,
 				D00000000000000000000014 /* VideoSourceTests.swift */,
 				E00000000000000000000014 /* ExtensionEcosystemTests.swift */,
 			);
@@ -378,6 +389,7 @@
 				F40000000000000000000002 /* ExtensionPresentation.swift in Sources */,
 				F20000000000000000000001 /* ReaderDownloadQueue.swift in Sources */,
 				FA0000000000000000000001 /* ImageLoadPolicy.swift in Sources */,
+				FC0000000000000000000001 /* ReaderDownloadStore.swift in Sources */,
 				FA0000000000000000000006 /* ContinueReading.swift in Sources */,
 				FA0000000000000000000008 /* SourceWebBrowser.swift in Sources */,
 				FA0000000000000000000007 /* SourceSettingsView.swift in Sources */,
@@ -436,6 +448,10 @@
 				B00000000000000000000004 /* SourceRuntimeTests.swift in Sources */,
 				C00000000000000000000005 /* SourceImageFileTests.swift in Sources */,
 				C00000000000000000000006 /* SourceImageFile.swift in Sources */,
+				FC0000000000000000000002 /* ReaderDownloadStore.swift in Sources */,
+				FC0000000000000000000003 /* ReaderDownloadStoreTests.swift in Sources */,
+				FC0000000000000000000004 /* ReaderSettings.swift in Sources */,
+				FC0000000000000000000005 /* ReaderSettingsTests.swift in Sources */,
 				D00000000000000000000004 /* VideoSourceTests.swift in Sources */,
 				E00000000000000000000004 /* ExtensionEcosystemTests.swift in Sources */,
 			);

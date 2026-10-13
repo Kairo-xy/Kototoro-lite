@@ -11,6 +11,8 @@ actor RequestGate {
     static let covers = RequestGate(limit: 8)
     /// Android's Coil loader: `decoderCoroutineContext(Dispatchers.IO.limitedParallelism(3))`.
     static let coverDecoding = RequestGate(limit: 3)
+    /// Shared by reader overviews and tiled bases: network concurrency does not bound native decode memory.
+    static let readerDecoding = RequestGate(limit: 2)
 
     private struct Waiter {
         let ticket: Int

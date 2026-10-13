@@ -2,6 +2,11 @@
 """Puts document-picker fixtures into the simulator's "On My iPhone" storage:
   * fixture_mihon.tachibk — a small Mihon backup (gzip + protobuf), for BackupFlowTests;
   * fixture_comic.cbz / fixture_novel.txt — a two-page comic and a GB18030 novel, for LocalImportTests.
+  * fixture_reader_long.cbz / fixture_reader_error.cbz — long-page restore and neighbour-failure regressions.
+  * fixture_reader_chapters.cbz / fixture_reader_download.cbz — automatic chapter turns and offline repair.
+  * fixture_reader_horizontal.cbz — horizontal reading direction, zoom and anchored restore.
+  * fixture_reader_pull_long.cbz — explicit previous-chapter last-page restore.
+  * fixture_reader_window.cbz — bounded paging windows across three chapters.
 
 Usage: stage-picker-fixtures.py <simulator id>
 """
@@ -67,6 +72,29 @@ for storage in storages:
     with zipfile.ZipFile(os.path.join(storage, "fixture_comic.cbz"), "w") as archive:
         archive.writestr("001.png", png(300, 420, (200, 60, 60)))
         archive.writestr("002.png", png(300, 420, (60, 60, 200)))
+    with zipfile.ZipFile(os.path.join(storage, "fixture_reader_long.cbz"), "w") as archive:
+        archive.writestr("001.png", png(800, 12000, (200, 60, 60)))
+        archive.writestr("002.png", png(800, 12000, (60, 60, 200)))
+    with zipfile.ZipFile(os.path.join(storage, "fixture_reader_error.cbz"), "w") as archive:
+        archive.writestr("001.png", png(300, 420, (200, 60, 60)))
+        archive.writestr("002.png", b"\x89PNG\r\n\x1a\ninvalid image")
+    with zipfile.ZipFile(os.path.join(storage, "fixture_reader_chapters.cbz"), "w") as archive:
+        archive.writestr("01/001.png", png(300, 200, (200, 60, 60)))
+        archive.writestr("02/001.png", png(300, 200, (60, 60, 200)))
+    with zipfile.ZipFile(os.path.join(storage, "fixture_reader_download.cbz"), "w") as archive:
+        archive.writestr("001.png", png(300, 420, (200, 60, 60)))
+        archive.writestr("002.png", png(300, 420, (60, 60, 200)))
+    with zipfile.ZipFile(os.path.join(storage, "fixture_reader_horizontal.cbz"), "w") as archive:
+        archive.writestr("001.png", png(1800, 600, (200, 60, 60)))
+        archive.writestr("002.png", png(900, 600, (60, 60, 200)))
+    with zipfile.ZipFile(os.path.join(storage, "fixture_reader_pull_long.cbz"), "w") as archive:
+        archive.writestr("01/001.png", png(600, 4000, (200, 60, 60)))
+        archive.writestr("01/002.png", png(600, 4000, (160, 40, 40)))
+        archive.writestr("02/001.png", png(600, 800, (60, 60, 200)))
+    with zipfile.ZipFile(os.path.join(storage, "fixture_reader_window.cbz"), "w") as archive:
+        for chapter, color in [("01", (200, 60, 60)), ("02", (60, 60, 200)), ("03", (60, 200, 60))]:
+            for page in range(1, 4):
+                archive.writestr(f"{chapter}/{page:03d}.png", png(600, 800, color))
     with open(os.path.join(storage, "fixture_novel.txt"), "wb") as file:
         file.write(novel.encode("gb18030"))
     print(storage)

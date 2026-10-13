@@ -7,6 +7,7 @@ import SwiftUI
 /// physical; right-to-left reading only flips the travel direction and the edge pages fold from.
 struct ReaderTurnPager<Page: View>: View {
     let count: Int
+    let revision: Int
     @Binding var current: Int
     let style: Int
     let vertical: Bool
@@ -15,6 +16,7 @@ struct ReaderTurnPager<Page: View>: View {
     let size: CGSize
     /// True while the page itself takes drags (zoomed in).
     let isLocked: () -> Bool
+    let onDragStart: () -> Void
     let onSettle: (Int) -> Void
     @ViewBuilder let page: (Int) -> Page
 
@@ -23,13 +25,17 @@ struct ReaderTurnPager<Page: View>: View {
     @State private var moving = false
     @State private var downFraction = 0.5
     @State private var dragActive = false
+    @State private var transitionID = 0
 
-    init(count: Int, current: Binding<Int>, style: Int, vertical: Bool, mirrored: Bool, engine: IosReader,
-         size: CGSize, isLocked: @escaping () -> Bool = { false }, onSettle: @escaping (Int) -> Void,
+    init(count: Int, revision: Int, current: Binding<Int>, style: Int, vertical: Bool, mirrored: Bool, engine: IosReader,
+         size: CGSize, isLocked: @escaping () -> Bool = { false },
+         onDragStart: @escaping () -> Void,
+         onSettle: @escaping (Int) -> Void,
          @ViewBuilder page: @escaping (Int) -> Page) {
-        self.count = count; _current = current; self.style = style; self.vertical = vertical
+        self.count = count; self.revision = revision; _current = current; self.style = style; self.vertical = vertical
         self.mirrored = mirrored; self.engine = engine; self.size = size; self.isLocked = isLocked
         self.onSettle = onSettle; self.page = page
+        self.onDragStart = onDragStart
         _position = State(initialValue: Double(current.wrappedValue))
         _anchor = State(initialValue: current.wrappedValue)
     }
@@ -70,6 +76,11 @@ struct ReaderTurnPager<Page: View>: View {
         .onChange(of: count) { _, _ in
             position = Double(min(current, max(0, count - 1))); anchor = Int(position)
         }
+        .onChange(of: revision) { _, _ in
+            transitionID += 1
+            position = Double(min(current, max(0, count - 1))); anchor = Int(position)
+            moving = false; dragActive = false
+        }
         // A container element, so the pages inside keep their own identifiers.
         .accessibilityElement(children: .contain)
         .accessibilityIdentifier("reader.turnPager")
@@ -78,7 +89,8 @@ struct ReaderTurnPager<Page: View>: View {
     private var drag: some Gesture {
         DragGesture(minimumDistance: 12)
             .onChanged { value in
-                guard dragActive || !isLocked() else { return }
+                guard count > 0, dragActive || !isLocked() else { return }
+                if !dragActive { onDragStart() }
                 dragActive = true
                 if !moving {
                     moving = true
@@ -91,6 +103,7 @@ struct ReaderTurnPager<Page: View>: View {
             .onEnded { value in
                 guard dragActive else { return }
                 dragActive = false
+                if isLocked() { settle(at: anchor, animation: .snappy(duration: 0.3)); return }
                 let predicted = (vertical ? value.predictedEndTranslation.height : value.predictedEndTranslation.width)
                     * readingSign / extent
                 let step = predicted > 0.3 ? 1 : predicted < -0.3 ? -1 : 0
@@ -107,10 +120,13 @@ struct ReaderTurnPager<Page: View>: View {
     }
 
     private func settle(at target: Int, animation: Animation) {
+        transitionID += 1
+        let token = transitionID
         moving = true
         withAnimation(animation) {
             position = Double(target)
         } completion: {
+            guard token == transitionID else { return }
             anchor = target
             moving = false
             downFraction = 0.5

@@ -127,6 +127,134 @@ class IosProductTest {
     }
 
     @Test
+    fun chapterWindowKeepsLocalIdentityAndMeasuredSizesAfterPromotion() {
+        val reader = IosReader()
+        val first = (0..4).map { IosReaderPage("first", it) }
+        val second = (0..2).map { IosReaderPage("second", it) }
+        val initial = reader.chapterWindow(emptyList(), first, second, 2)
+        assertEquals(first + second.take(2), initial)
+        reader.setPages(initial)
+        reader.configure(initial.size, 600, 800, 3, false, false, 0)
+        reader.setImageSize(4, 600, 3000)
+        reader.setImageSize(5, 600, 1200)
+        val promoted = reader.chapterWindow(first, second, emptyList(), 2)
+        assertEquals(first.takeLast(2) + second, promoted)
+        reader.setPages(promoted)
+        assertEquals(3000f, reader.slots()[1].placements.single().height)
+        assertEquals(1200f, reader.slots()[2].placements.single().height)
+        val origin = reader.scrollOrigin(2, 150f)
+        assertEquals(IosReaderProgress(2, 150f), reader.progress(0f, origin))
+    }
+
+    @Test
+    fun adjacentChapterSpreadsNeverPairAcrossTheBoundaryAndRetainCoverParity() {
+        val reader = IosReader()
+        reader.setPages(listOf(IosReaderPage("previous", 3), IosReaderPage("previous", 4),
+            IosReaderPage("current", 0), IosReaderPage("current", 1), IosReaderPage("current", 2)))
+        reader.configure(5, 800, 1000, 0, true, false, 0)
+        assertEquals(listOf(listOf(0), listOf(1), listOf(2, 3), listOf(4)),
+            reader.slots().map { it.placements.map { placement -> placement.index } })
+        reader.configure(5, 800, 1000, 1, true, true, 0)
+        assertEquals(listOf(listOf(0, 1), listOf(2), listOf(3, 4)),
+            reader.slots().map { it.placements.map { placement -> placement.index } })
+    }
+
+    @Test
+    fun retinaDensityDoesNotMovePagedVisibleRegion() {
+        val reader = IosReader()
+        reader.configure(1, 500, 700, 0, false, false, 1)
+        reader.setImageSize(0, 2000, 12000)
+        val normal = reader.visibleTiles(0f, 0f, 0, 2000, 12000, 1f)
+        val retina = reader.visibleTiles(0f, 0f, 0, 2000, 12000, 3f)
+        // Fit-width centres the 3000-point page in the 700-point viewport: source pixels 4600..7400 are visible.
+        assertTrue(normal.minOf { it.logicalTop } <= 4600)
+        assertTrue(retina.minOf { it.logicalTop } <= 4600)
+        assertTrue(retina.maxOf { it.logicalTop + it.logicalHeight } >= 7400)
+        assertTrue(retina.all { it.sampleSize == 1 })
+    }
+
+    @Test
+    fun horizontalContinuousStartsInAndroidsDefaultReadingDirection() {
+        val reader = IosReader()
+        reader.configure(3, 400, 600, 4, false, false, 0, false)
+        repeat(3) { reader.setImageSize(it, 1200, 600) }
+        assertEquals(0f, reader.slots()[0].placements.single().x)
+        assertEquals(0f, reader.scrollOrigin(0, 0f))
+        assertEquals(IosReaderProgress(0, 200f), reader.progress(200f, 0f))
+    }
+
+    @Test
+    fun horizontalDirectionAndZoomPreserveSemanticOffsets() {
+        val reader = IosReader()
+        for (reversed in listOf(false, true)) {
+            reader.configure(3, 400, 600, 4, false, false, 0, false, reversed)
+            repeat(3) { reader.setImageSize(it, 1200, 600) }
+            for (zoom in listOf(1f, 2f, 4f)) {
+                reader.setZoom(zoom)
+                repeat(3) { index ->
+                    val origin = reader.scrollOrigin(index, 150f)
+                    assertEquals(IosReaderProgress(index, 150f), reader.progress(origin, 0f))
+                    assertEquals(600f * zoom, reader.slots()[index].placements.single().height)
+                }
+            }
+            reader.setZoom(1f)
+            val origins = (0..2).map { reader.scrollOrigin(it, 0f) }
+            assertTrue(if (reversed) origins[0] > origins[1] else origins[0] < origins[1])
+        }
+    }
+
+    @Test
+    fun lateHorizontalImageSizePreservesTheRtlReadingAnchor() {
+        val reader = IosReader()
+        reader.configure(3, 400, 600, 4, false, false, 0, false, true)
+        repeat(3) { reader.setImageSize(it, 1200, 600) }
+        val origin = reader.scrollOrigin(1, 200f)
+        val compensated = assertNotNull(reader.setImageSize(2, 2400, 600, origin, 0f))
+        assertEquals(origin + 1200f, compensated.x)
+        assertEquals(IosReaderProgress(1, 200f), reader.progress(compensated.x, compensated.y))
+    }
+
+    @Test
+    fun horizontalTilesUseTheSamePhysicalViewportInBothDirections() {
+        for (reversed in listOf(false, true)) {
+            val reader = IosReader()
+            reader.configure(1, 400, 600, 4, false, false, 0, false, reversed)
+            reader.setImageSize(0, 10000, 1000)
+            val tiles = reader.visibleTiles(2000f, 0f, 0, 10000, 1000, 3f)
+            assertTrue(tiles.isNotEmpty())
+            assertTrue(tiles.minOf { it.logicalLeft } <= 3333)
+            assertTrue(tiles.maxOf { it.logicalLeft + it.logicalWidth } >= 4000)
+        }
+    }
+
+    @Test
+    fun lateImageSizePreservesTheContinuousReadingAnchor() {
+        val reader = IosReader()
+        reader.configure(3, 500, 700, 3, false, false, 0)
+        reader.setImageSize(1, 500, 1400)
+        val before = reader.progress(0f, 1200f)
+        assertEquals(IosReaderProgress(1, 500f), before)
+        val compensated = assertNotNull(reader.setImageSize(0, 500, 2100, 0f, 1200f))
+        assertEquals(2600f, compensated.y)
+        assertEquals(before, reader.progress(compensated.x, compensated.y))
+        assertNull(reader.setImageSize(0, 500, 2100, 0f, 2600f))
+    }
+
+    @Test
+    fun pixelDensityAndCameraZoomIndependentlySelectPagedTiles() {
+        val reader = IosReader()
+        reader.configure(1, 500, 700, 0, false, false, 1)
+        reader.setImageSize(0, 2000, 12000)
+        val normal = reader.visibleTiles(0f, 0f, 0, 2000, 12000, 1f, 2f)
+        val retina = reader.visibleTiles(0f, 0f, 0, 2000, 12000, 3f, 2f)
+        assertTrue(normal.all { it.sampleSize == 2 })
+        assertTrue(retina.all { it.sampleSize == 1 })
+        // A 2x camera shows the middle half of the fit-width viewport, independent of Retina density.
+        assertTrue(retina.minOf { it.logicalTop } <= 5300)
+        assertTrue(retina.maxOf { it.logicalTop + it.logicalHeight } >= 6700)
+    }
+
+    @Test
     fun offlinePageArchiveKeepsHeadersContextAndExactIds() {
         val codec = IosPageArchive()
         assertEquals(page, codec.decode(codec.encode(listOf(IosSourcePage(page)))).single().value)
