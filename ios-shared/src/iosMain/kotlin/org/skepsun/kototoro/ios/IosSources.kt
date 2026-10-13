@@ -26,7 +26,25 @@ import org.skepsun.kototoro.core.source.SourceProtocolClient
 import org.skepsun.kototoro.core.source.SourceTag
 import org.skepsun.kototoro.core.source.SourceTransport
 import org.skepsun.kototoro.tvbox.MacCmsSourceRuntime
+import org.skepsun.kototoro.bookmarks.domain.novelBookmarkChapterProgress
+import org.skepsun.kototoro.bookmarks.domain.resolveNovelBookmarkPosition
 import org.skepsun.kototoro.local.shared.LocalSourceRuntime
+import org.skepsun.kototoro.reader.novel.NovelDocumentBlock
+import org.skepsun.kototoro.reader.novel.NovelPageSegment
+import org.skepsun.kototoro.reader.novel.NovelParagraphStyle
+import org.skepsun.kototoro.reader.novel.NovelStyledText
+import org.skepsun.kototoro.reader.novel.NovelReaderLimits
+import org.skepsun.kototoro.reader.novel.NovelReaderThemePreset
+import org.skepsun.kototoro.reader.novel.buildNovelPageSegments
+import org.skepsun.kototoro.reader.novel.buildNovelLineDocument
+import org.skepsun.kototoro.reader.novel.novelBlockAtOffset
+import org.skepsun.kototoro.reader.novel.novelHtmlToStyledText
+import org.skepsun.kototoro.reader.novel.isNovelChapterTitleLine
+import org.skepsun.kototoro.reader.novel.novelOffsetScroll
+import org.skepsun.kototoro.reader.novel.novelReaderColors
+import org.skepsun.kototoro.reader.novel.novelScrollOffset
+import org.skepsun.kototoro.reader.novel.positionOf
+import org.skepsun.kototoro.reader.novel.splitNovelPageLineRanges
 import okio.Path.Companion.toPath
 import platform.Foundation.NSUUID
 
@@ -80,7 +98,221 @@ class IosChapterText internal constructor(internal val value: SourceChapterConte
 
     /** Request headers the source requires for one of the chapter's pictures (Referer, cookies, ...). */
     fun headers(imageUrl: String): Map<String, String> = value.images.firstOrNull { it.url == imageUrl }?.headers.orEmpty()
+
+    /** The chapter as the reader shows it, one block per line; the shared HTML conversion Android's EPUB reader uses. */
+    fun document(): IosNovelDocument = IosNovelDocument(novelHtmlToStyledText(value.html))
 }
+
+/**
+ * A converted novel chapter: its line blocks plus the position rules shared with Android. History stores the chapter
+ * progress of the first visible line (see `novelOffsetScroll`), so either reader restores the other's position.
+ */
+class IosNovelDocument internal constructor(internal val styled: NovelStyledText) {
+    internal val text: String get() = styled.text
+    internal val lines = buildNovelLineDocument(styled.text)
+
+    val blocks: List<IosNovelBlock> = lines.map { block ->
+        when (block) {
+            is NovelDocumentBlock.Text -> IosNovelBlock(block.original, null)
+            is NovelDocumentBlock.Image -> IosNovelBlock(null, block.path)
+        }
+    }
+
+    /** The history `scroll` value for a reader whose first visible block is [index]. */
+    fun scroll(index: Int): Float =
+        lines.getOrNull(index)?.sourceRange?.let { novelOffsetScroll(it.first, text.length).toFloat() } ?: 0f
+
+    /** The block a history record points at: its chapter progress when it has one, else the stored line [index]. */
+    fun index(scroll: Float, index: Int): Int {
+        val located = novelScrollOffset(scroll, text.length)?.let { novelBlockAtOffset(lines, it) } ?: index
+        return located.coerceIn(0, (lines.size - 1).coerceAtLeast(0))
+    }
+
+    /**
+     * The block a bookmark of this chapter points at, found by its text excerpt as Android does (the branch progress
+     * separates repeats); bookmarks without an excerpt, or whose excerpt is gone, keep their stored line.
+     */
+    fun bookmarkIndex(bookmark: IosBookmark, content: IosSourceContent): Int {
+        val chapters = content.value.chapters.orEmpty()
+        val chapter = chapters.firstOrNull { it.id == bookmark.value.chapterId }
+        val branch = chapters.filter { it.branch == chapter?.branch }
+        val chapterIndex = branch.indexOfFirst { it.id == bookmark.value.chapterId }
+        val progress = if (chapterIndex >= 0) {
+            novelBookmarkChapterProgress(bookmark.value.percent, chapterIndex, branch.size)
+        } else {
+            0f
+        }
+        val segments = lines.map { (it as? NovelDocumentBlock.Text)?.original.orEmpty() }
+        val located = resolveNovelBookmarkPosition(segments, bookmark.preview, bookmark.index, progress) ?: bookmark.index
+        return located.coerceIn(0, (lines.size - 1).coerceAtLeast(0))
+    }
+
+    /**
+     * The chapter prepared for the paged reader with the given paragraph settings. With [bookStyles], lines the book
+     * styles as headings, centred or right-aligned text, or without a first-line indent are not indented.
+     */
+    fun pages(indent: Boolean, spacingLines: Int, bookStyles: Boolean): IosNovelPages =
+        IosNovelPages(this, bookStyles, buildNovelPageSegments(lines, indent, spacingLines) { index, line ->
+            !isNovelChapterTitleLine(line) && (!bookStyles || paragraphOf(index)?.takesIndent != false)
+        })
+
+    /** The book's styles for line [index] alone, in its own character offsets (the scrolling reader). */
+    fun lineStyles(index: Int): List<IosNovelStyleRun> {
+        val range = lines.getOrNull(index)?.sourceRange ?: return emptyList()
+        return styleRuns(range.first, range.last + 1, -range.first)
+    }
+
+    fun lineParagraph(index: Int): IosNovelParagraphRun? {
+        val range = lines.getOrNull(index)?.sourceRange ?: return null
+        return paragraphRun(index, 0, range.last - range.first + 1)
+    }
+
+    internal fun paragraphOf(index: Int): NovelParagraphStyle? =
+        lines.getOrNull(index)?.sourceRange?.let { styled.paragraphAt(it.first) }
+
+    /** Inline styles and ruby readings of `start until end`, moved by [shift]. */
+    internal fun styleRuns(start: Int, end: Int, shift: Int): List<IosNovelStyleRun> =
+        styled.spansIn(start, end).map { span ->
+            val style = span.style
+            IosNovelStyleRun(span.start + shift, span.end + shift, style.bold, style.italic, style.underline,
+                style.strike, style.verticalPosition, style.fontScale, null)
+        } + styled.rubiesIn(start, end).map { ruby ->
+            IosNovelStyleRun(ruby.start + shift, ruby.end + shift, false, false, false, false, 0, 1f, ruby.text)
+        }
+
+    /** Paragraph layout of line [index] laid out at `start until end`. */
+    internal fun paragraphRun(index: Int, start: Int, end: Int): IosNovelParagraphRun? {
+        val range = lines.getOrNull(index)?.sourceRange ?: return null
+        val paragraph = styled.paragraphAt(range.first) ?: return null
+        val runs = styled.spansIn(range.first, range.last + 1)
+        return IosNovelParagraphRun(start, end, paragraph.align.ordinal, paragraph.heading,
+            maxOf(1f, runs.maxOfOrNull { it.style.fontScale } ?: 1f),
+            styled.rubiesIn(range.first, range.last + 1).isNotEmpty(), paragraph.takesIndent)
+    }
+}
+
+/** An inline style or, with [ruby], a reading over its characters. [vertical] is 1 for superscript, -1 for subscript. */
+data class IosNovelStyleRun(val start: Int, val end: Int, val bold: Boolean, val italic: Boolean,
+    val underline: Boolean, val strike: Boolean, val vertical: Int, val scale: Float, val ruby: String?)
+
+/**
+ * Layout of one line: [align] is start, centre, end or justify (0–3), [scale] the largest font scale on it, so its
+ * line height grows with headings, [ruby] whether readings need room above it, and [indent] whether the book leaves
+ * the reader's paragraph indent to it.
+ */
+data class IosNovelParagraphRun(val start: Int, val end: Int, val align: Int, val heading: Int, val scale: Float,
+    val ruby: Boolean, val indent: Boolean)
+
+/**
+ * Text segments and pictures of the paged reader, with positions in the same terms as the scrolling reader: the
+ * block shown at a segment offset, and the history value for it (the character offset in the converted chapter).
+ */
+class IosNovelPages internal constructor(
+    private val document: IosNovelDocument,
+    private val bookStyles: Boolean,
+    private val segments: List<NovelPageSegment>,
+) {
+    private val lines get() = document.lines
+    private val text get() = document.text
+
+    val count: Int get() = segments.size
+
+    /** The text to lay out for [segment], or null for a picture. */
+    fun text(segment: Int): String? = (segments.getOrNull(segment) as? NovelPageSegment.Text)?.text
+
+    fun imageUrl(segment: Int): String? = (segments.getOrNull(segment) as? NovelPageSegment.Image)?.path
+
+    /** The book's inline styles and ruby readings in [segment]'s text; none without book styles. */
+    fun styles(segment: Int): List<IosNovelStyleRun> {
+        val value = segments.getOrNull(segment) as? NovelPageSegment.Text ?: return emptyList()
+        if (!bookStyles) return emptyList()
+        return (value.firstBlock until value.firstBlock + value.blockCount).flatMap { block ->
+            val range = lines.getOrNull(block)?.sourceRange ?: return@flatMap emptyList()
+            document.styleRuns(range.first, range.last + 1, value.contentStart(block) - range.first)
+        }
+    }
+
+    /** Layout of each line of [segment]'s text; none without book styles. */
+    fun paragraphs(segment: Int): List<IosNovelParagraphRun> {
+        val value = segments.getOrNull(segment) as? NovelPageSegment.Text ?: return emptyList()
+        if (!bookStyles) return emptyList()
+        return (value.firstBlock until value.firstBlock + value.blockCount).mapNotNull { block ->
+            val range = lines.getOrNull(block)?.sourceRange ?: return@mapNotNull null
+            document.paragraphRun(block, value.lineStart(block), value.contentStart(block) + range.last - range.first + 1)
+        }
+    }
+
+    /** The document block shown at [offset] of [segment]. */
+    fun block(segment: Int, offset: Int): Int = when (val value = segments.getOrNull(segment)) {
+        is NovelPageSegment.Text -> value.blockAt(offset)
+        is NovelPageSegment.Image -> value.block
+        null -> 0
+    }
+
+    /** The history `scroll` value for a page starting at [offset] of [segment]. */
+    fun scroll(segment: Int, offset: Int): Float {
+        val value = segments.getOrNull(segment) ?: return 0f
+        val block = block(segment, offset)
+        val start = lines.getOrNull(block)?.sourceRange ?: return 0f
+        val inBlock = (value as? NovelPageSegment.Text)?.offsetInBlock(offset) ?: 0
+        return novelOffsetScroll(start.first + minOf(inBlock, start.last - start.first + 1), text.length).toFloat()
+    }
+
+    /** Where a history record points: its chapter progress when it has one, else the stored line [index]. */
+    fun position(scroll: Float, index: Int): IosNovelSegmentPosition {
+        val offset = novelScrollOffset(scroll, text.length)
+        val block = offset?.let { novelBlockAtOffset(lines, it) } ?: index.coerceIn(0, (lines.size - 1).coerceAtLeast(0))
+        val inBlock = offset?.let { it - (lines.getOrNull(block)?.sourceRange?.first ?: it) } ?: 0
+        return position(block, inBlock)
+    }
+
+    /** Where [block] (and character [inBlock] of it) is laid out. */
+    fun position(block: Int, inBlock: Int): IosNovelSegmentPosition =
+        segments.positionOf(block, inBlock)?.let { IosNovelSegmentPosition(it.segment, it.offset) }
+            ?: IosNovelSegmentPosition(0, 0)
+}
+
+data class IosNovelSegmentPosition(val segment: Int, val offset: Int)
+
+/** Reader settings and colors shared with Android, and the page-splitting rule its paged reader uses. */
+object IosNovelStyle {
+    val defaultFontSize: Float = NovelReaderLimits.DEFAULT_FONT_SIZE
+    val minFontSize: Float = NovelReaderLimits.FONT_SIZE_RANGE.start
+    val maxFontSize: Float = NovelReaderLimits.FONT_SIZE_RANGE.endInclusive
+    val fontSizeStep: Float = NovelReaderLimits.FONT_SIZE_STEP
+    val defaultLineSpacing: Float = NovelReaderLimits.DEFAULT_LINE_SPACING
+    val minLineSpacing: Float = NovelReaderLimits.LINE_SPACING_RANGE.start
+    val maxLineSpacing: Float = NovelReaderLimits.LINE_SPACING_RANGE.endInclusive
+    val lineSpacingStep: Float = NovelReaderLimits.LINE_SPACING_STEP
+    val maxParagraphSpacing: Int = NovelReaderLimits.PARAGRAPH_SPACING_RANGE.endInclusive.toInt()
+    val defaultMargin: Int = NovelReaderLimits.DEFAULT_MARGIN
+    val minMargin: Int = NovelReaderLimits.MARGIN_RANGE.first
+    val maxMargin: Int = NovelReaderLimits.MARGIN_RANGE.last
+    val marginStep: Int = NovelReaderLimits.MARGIN_STEP
+    val themes: List<String> = NovelReaderThemePreset.entries.map { it.name }
+
+    fun colors(theme: String, dark: Boolean): IosNovelColors {
+        val preset = NovelReaderThemePreset.entries.firstOrNull { it.name == theme } ?: NovelReaderThemePreset.PAPER
+        val colors = novelReaderColors(preset, dark)
+        return IosNovelColors(colors.background, colors.text, colors.secondaryText, colors.chromeBackground,
+            colors.chromeText, colors.highlight)
+    }
+
+    /** A "第N章"-style or bracketed title line, which is not indented. */
+    fun isTitleLine(line: String): Boolean = isNovelChapterTitleLine(line)
+
+    /** First line of each page, given each line's top and bottom in points; Android splits its pages the same way. */
+    fun pageStarts(tops: FloatArray, bottoms: FloatArray, pageHeight: Int): IntArray =
+        splitNovelPageLineRanges(minOf(tops.size, bottoms.size), pageHeight, tops::get, bottoms::get)
+            .map { it.first }.toIntArray()
+}
+
+/** ARGB colors of a reader theme. */
+data class IosNovelColors(val background: Long, val text: Long, val secondaryText: Long, val chromeBackground: Long,
+    val chromeText: Long, val highlight: Long)
+
+/** A paragraph line ([text]) or an illustration ([imageUrl]) of a novel chapter. */
+class IosNovelBlock internal constructor(val text: String?, val imageUrl: String?)
 
 /** Native sources are always listed; an extension runtime failure is reported without hiding them. */
 data class IosSourceCatalog(val sources: List<IosSource>, val extensionError: String?)

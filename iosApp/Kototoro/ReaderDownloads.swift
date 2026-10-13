@@ -203,7 +203,7 @@ enum NovelDownloads {
         }
         // Pictures named in the text as well as those the source lists, each once.
         var urls: [String] = []
-        for url in text.images + NovelText.blocks(from: text.html).compactMap({ block -> String? in
+        for url in text.images + NovelBlock.blocks(from: text).compactMap({ block -> String? in
             if case .image(let url) = block { return url.absoluteString } else { return nil }
         }) where !urls.contains(url) { urls.append(url) }
         let total = urls.count + 1
