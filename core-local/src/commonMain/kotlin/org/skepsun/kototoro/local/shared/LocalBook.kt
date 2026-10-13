@@ -32,6 +32,10 @@ data class LocalChapter(
     val pages: List<String> = emptyList(),
     /** The chapter's XHTML entry (EPUB). */
     val document: String? = null,
+    /** Anchors (element ids) where the chapter starts and where the next one starts within [document]; null for
+     *  the document start or end. Set when a document holds several table-of-contents sections. */
+    val section: String? = null,
+    val sectionEnd: String? = null,
     /** Character range of the chapter in the decoded text (TXT). */
     val textStart: Int = 0,
     val textEnd: Int = 0,
@@ -45,11 +49,16 @@ class LocalBookReader(
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-    fun read(file: Path, format: LocalFormat, fallbackTitle: String): LocalBook = when (format) {
-        LocalFormat.ARCHIVE -> readArchive(file, fallbackTitle)
-        LocalFormat.EPUB -> readEpub(file, fallbackTitle)
-        LocalFormat.TXT -> readText(file, fallbackTitle)
-    }
+    /**
+     * [splitSections] makes every table-of-contents section of an EPUB document a chapter of its own; without it each
+     * spine document is one chapter (the layout of works imported before sections were split).
+     */
+    fun read(file: Path, format: LocalFormat, fallbackTitle: String, splitSections: Boolean = true): LocalBook =
+        when (format) {
+            LocalFormat.ARCHIVE -> readArchive(file, fallbackTitle)
+            LocalFormat.EPUB -> readEpub(file, fallbackTitle, splitSections)
+            LocalFormat.TXT -> readText(file, fallbackTitle)
+        }
 
     /** Bytes of one entry inside an archive or EPUB. */
     fun entry(file: Path, entry: String): ByteArray {
@@ -139,7 +148,7 @@ class LocalBookReader(
 
     // MARK: EPUB
 
-    private fun readEpub(file: Path, fallbackTitle: String): LocalBook {
+    private fun readEpub(file: Path, fallbackTitle: String, splitSections: Boolean): LocalBook {
         val zip = fileSystem.openZip(file)
         fun read(entry: String): String? = runCatching { zip.read(("/$entry").toPath()) { readUtf8() } }.getOrNull()
         val container = read("META-INF/container.xml") ?: throw IllegalArgumentException("EPUB 缺少 container.xml")
@@ -154,13 +163,20 @@ class LocalBookReader(
         val spine = LocalXml.tags(opf, "itemref").mapNotNull { manifest[it["idref"]] }
             .filter { it.mediaType.contains("html") || it.href.endsWith("html", ignoreCase = true) }
         require(spine.isNotEmpty()) { "EPUB 没有正文" }
-        val toc = tableOfContents(manifest.values, opf, ::read)
-        val chapters = spine.mapIndexed { index, item ->
-            LocalChapter(
-                title = toc[item.href] ?: "第 ${index + 1} 节",
-                number = (index + 1).toFloat(),
-                document = item.href,
-            )
+        val toc = tableOfContents(manifest.values, ::read)
+        val chapters = mutableListOf<LocalChapter>()
+        spine.forEach { item ->
+            val entries = toc.filter { it.document == item.href }
+            val sections = if (splitSections && entries.size > 1) sections(entries, read(item.href)) else emptyList()
+            if (sections.size < 2) {
+                chapters += LocalChapter(entries.firstOrNull()?.title ?: "第 ${chapters.size + 1} 节",
+                    (chapters.size + 1).toFloat(), document = item.href)
+                return@forEach
+            }
+            sections.forEachIndexed { index, (title, anchor) ->
+                chapters += LocalChapter(title, (chapters.size + 1).toFloat(), document = item.href,
+                    section = anchor, sectionEnd = sections.getOrNull(index + 1)?.second)
+            }
         }
         val coverId = LocalXml.tags(opf, "meta").firstOrNull { it["name"] == "cover" }?.get("content")
         val cover = manifest.values.firstOrNull { "cover-image" in it.properties }?.href
@@ -176,27 +192,48 @@ class LocalBookReader(
         )
     }
 
-    /** Chapter titles by document: EPUB 3 navigation document first, the EPUB 2 NCX otherwise. */
-    private fun tableOfContents(items: Collection<EpubItem>, opf: String, read: (String) -> String?): Map<String, String> {
-        val titles = linkedMapOf<String, String>()
+    /** One table-of-contents entry: its title and where it points (a document, optionally an anchor in it). */
+    private class TocEntry(val title: String, val document: String, val fragment: String?)
+
+    /** Table-of-contents entries in reading order: the EPUB 3 navigation document first, the EPUB 2 NCX otherwise. */
+    private fun tableOfContents(items: Collection<EpubItem>, read: (String) -> String?): List<TocEntry> {
+        fun entry(base: String, href: String, title: String) = TocEntry(title, resolveHref(base, href),
+            href.substringAfter('#', "").takeIf(String::isNotEmpty)?.let(::decodePercent))
         items.firstOrNull { "nav" in it.properties.split(' ') }?.let { nav ->
             val xml = read(nav.href) ?: return@let
-            Regex("<a\\s[^>]*href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
-                .findAll(xml).forEach { match ->
-                    val title = LocalXml.text(match.groupValues[2])
-                    if (title.isNotEmpty()) titles.getOrPut(resolveHref(nav.href, match.groupValues[1])) { title }
-                }
+            // Only the table of contents: other navigation lists (landmarks, page lists) follow it.
+            val toc = Regex("<nav\\b[^>]*toc[^>]*>([\\s\\S]*?)</nav>", RegexOption.IGNORE_CASE)
+                .find(xml)?.groupValues?.get(1) ?: xml
+            val entries = Regex("<a\\s[^>]*href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
+                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).findAll(toc).mapNotNull { match ->
+                LocalXml.text(match.groupValues[2]).takeIf(String::isNotEmpty)?.let { entry(nav.href, match.groupValues[1], it) }
+            }.toList()
+            if (entries.isNotEmpty()) return entries
         }
-        if (titles.isNotEmpty()) return titles
         val ncx = items.firstOrNull { it.mediaType == "application/x-dtbncx+xml" || it.href.endsWith(".ncx", true) }
-            ?: return titles
-        val xml = read(ncx.href) ?: return titles
-        Regex("<navLabel[^>]*>\\s*<text[^>]*>(.*?)</text>.*?<content\\s[^>]*src\\s*=\\s*[\"']([^\"']+)[\"']",
-            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).findAll(xml).forEach { match ->
-            val title = LocalXml.text(match.groupValues[1])
-            if (title.isNotEmpty()) titles.getOrPut(resolveHref(ncx.href, match.groupValues[2])) { title }
+            ?: return emptyList()
+        val xml = read(ncx.href) ?: return emptyList()
+        return Regex("<navLabel[^>]*>\\s*<text[^>]*>(.*?)</text>.*?<content\\s[^>]*src\\s*=\\s*[\"']([^\"']+)[\"']",
+            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).findAll(xml).mapNotNull { match ->
+            LocalXml.text(match.groupValues[1]).takeIf(String::isNotEmpty)?.let { entry(ncx.href, match.groupValues[2], it) }
+        }.toList()
+    }
+
+    /**
+     * A document's sections as (title, start anchor): the first starts at the document start under the first entry's
+     * title, each later entry whose anchor the document has starts the next one. Repeated anchors count once.
+     */
+    private fun sections(entries: List<TocEntry>, xhtml: String?): List<Pair<String, String?>> {
+        if (xhtml == null) return emptyList()
+        val sections = mutableListOf<Pair<String, String?>>(entries.first().title to null)
+        val seen = mutableSetOf<String>()
+        entries.drop(1).forEach { entry ->
+            val anchor = entry.fragment ?: return@forEach
+            if (anchor in seen || anchorPosition(xhtml, anchor) == null) return@forEach
+            seen += anchor
+            sections += entry.title to anchor
         }
-        return titles
+        return sections
     }
 
     private class EpubItem(val href: String, val mediaType: String, val properties: String)
@@ -248,6 +285,10 @@ class LocalBookReader(
             }
             return chapters
         }
+
+        /** Where the element with id (or anchor name) [anchor] starts in [xhtml]. */
+        fun anchorPosition(xhtml: String, anchor: String): Int? =
+            Regex("<[^<>]*\\s(?:id|name)\\s*=\\s*[\"']${Regex.escape(anchor)}[\"']").find(xhtml)?.range?.first
 
         /** Java's `%0Nd`: zero padding after the sign, as Android formats the entry pattern. */
         private fun javaPad(value: Int, width: Int): String {

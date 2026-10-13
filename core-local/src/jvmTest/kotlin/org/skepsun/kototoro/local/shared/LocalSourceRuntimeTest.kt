@@ -37,6 +37,74 @@ class LocalSourceRuntimeTest {
         return file.toOkioPath()
     }
 
+    @Test
+    fun epubSectionsOfOneDocumentBecomeChaptersForNewImportsOnly() = runTest {
+        val opf = """<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+            |<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>分节</dc:title></metadata>
+            |<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+            |<item id="all" href="text/all.xhtml" media-type="application/xhtml+xml"/>
+            |<item id="end" href="text/end.xhtml" media-type="application/xhtml+xml"/></manifest>
+            |<spine><itemref idref="all"/><itemref idref="end"/></spine></package>""".trimMargin()
+        val nav = """<html><body><nav epub:type="toc"><ol>
+            |<li><a href="text/all.xhtml">卷一</a><ol><li><a href="text/all.xhtml#c1">第一章</a></li>
+            |<li><a href="text/all.xhtml#c2">第二章</a></li><li><a href="text/all.xhtml#gone">不存在</a></li></ol></li>
+            |<li><a href="text/end.xhtml">后记</a></li></ol></nav>
+            |<nav epub:type="landmarks"><ol><li><a href="text/all.xhtml#c2">正文</a></li></ol></nav></body></html>""".trimMargin()
+        val all = """<html><body><h1>卷一</h1><div class="part"><h2 id="c1">第一章</h2><p>甲</p>
+            |<h2 id="c2">第二章</h2><p>乙</p></div></body></html>""".trimMargin()
+        val file = zip("sections.epub", mapOf(
+            "mimetype" to "application/epub+zip".encodeToByteArray(),
+            "META-INF/container.xml" to """<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>""".encodeToByteArray(),
+            "OEBPS/content.opf" to opf.encodeToByteArray(),
+            "OEBPS/nav.xhtml" to nav.encodeToByteArray(),
+            "OEBPS/text/all.xhtml" to all.encodeToByteArray(),
+            "OEBPS/text/end.xhtml" to "<html><body><p>完</p></body></html>".encodeToByteArray(),
+        ))
+        val runtime = runtime()
+        val imported = runtime.import(file, "sections.epub")
+        val details = runtime.getDetails(imported, SourceDetailsFetchMode.ALLOW_CACHE)
+        assertEquals(listOf("卷一", "第一章", "第二章", "后记"), details.chapters!!.map { it.title })
+        val texts = details.chapters!!.map { runtime.getChapterContent(it, null).html }
+        assertTrue(texts[0].contains("<h1>卷一</h1>") && !texts[0].contains("甲"), texts[0])
+        assertTrue(texts[1].contains("甲") && !texts[1].contains("乙"), texts[1])
+        assertTrue(texts[2].contains("乙") && !texts[2].contains("甲"), texts[2])
+        assertTrue(texts[3].contains("完"), texts[3])
+
+        // A work imported before sections were split keeps one chapter per document.
+        val meta = File(dir, "store/items/${imported.id}/meta.json")
+        val legacy = meta.readText().replace(Regex(""",?"chapterScheme":\d+"""), "")
+        meta.writeText(legacy)
+        val old = runtime().getDetails(imported, SourceDetailsFetchMode.ALLOW_CACHE)
+        assertEquals(listOf("卷一", "后记"), old.chapters!!.map { it.title })
+        assertTrue(runtime().getChapterContent(old.chapters!!.first(), null).html.contains("乙"))
+    }
+
+    @Test
+    fun epubChaptersCarryTheirStyleSheets() = runTest {
+        val opf = """<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0">
+            |<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>样式</dc:title></metadata>
+            |<manifest><item id="c1" href="text/c1.xhtml" media-type="application/xhtml+xml"/>
+            |<item id="css" href="styles/book.css" media-type="text/css"/></manifest>
+            |<spine><itemref idref="c1"/></spine></package>""".trimMargin()
+        val chapter = """<html><head><title>T</title><link rel="stylesheet" type="text/css" href="../styles/book.css"/>
+            |<style>.note { font-size: small }</style><link rel="icon" href="x.png"/></head>
+            |<body><h1 class="title">第一章</h1><p class="noindent">正文</p></body></html>""".trimMargin()
+        val file = zip("styled.epub", mapOf(
+            "mimetype" to "application/epub+zip".encodeToByteArray(),
+            "META-INF/container.xml" to """<container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>""".encodeToByteArray(),
+            "OEBPS/content.opf" to opf.encodeToByteArray(),
+            "OEBPS/text/c1.xhtml" to chapter.encodeToByteArray(),
+            "OEBPS/styles/book.css" to "h1.title { text-align: center }\n.noindent { text-indent: 0 }".encodeToByteArray(),
+        ))
+        val runtime = runtime()
+        val details = runtime.getDetails(runtime.import(file, "styled.epub"), SourceDetailsFetchMode.ALLOW_CACHE)
+        val html = runtime.getChapterContent(details.chapters!!.single(), null).html
+        assertTrue(html.startsWith("<style>h1.title { text-align: center }"), html)
+        assertTrue(html.indexOf(".note { font-size: small }") in 1 until html.indexOf("</style>"), html)
+        assertTrue(html.contains("<p class=\"noindent\">正文</p>"), html)
+        assertFalse(html.contains("<title>"), html)
+    }
+
     /** Archives Kototoro writes on Android: index.json + `%08d_%04d%04d` entries for every chapter. */
     @Test
     fun kototoroArchiveKeepsItsChaptersAndMetadata() = runTest {

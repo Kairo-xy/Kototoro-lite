@@ -40,6 +40,12 @@ data class LocalItem(
     val format: LocalFormat,
     val size: Long,
     val importedAt: Long,
+    /**
+     * How EPUB chapters are cut: 1 is one chapter per spine document (works imported before 2026-10), 2 splits a
+     * document at its table-of-contents sections. Chapter ids follow the chapter order, so an existing import keeps
+     * its scheme and its history and bookmarks stay on the right chapters.
+     */
+    val chapterScheme: Int = 1,
 )
 
 /**
@@ -110,7 +116,7 @@ class LocalSourceRuntime(
             val part = book(item).chapters.getOrNull(index) ?: throw IllegalArgumentException("章节不存在")
             when (item.format) {
                 LocalFormat.TXT -> SourceChapterContent(textHtml(text(item).substring(part.textStart, part.textEnd)))
-                LocalFormat.EPUB -> epubChapter(item, part.document ?: throw IllegalArgumentException("章节不存在"))
+                LocalFormat.EPUB -> epubChapter(item, part)
                 LocalFormat.ARCHIVE -> throw SourceOperationUnsupportedException()
             }
         }
@@ -145,7 +151,7 @@ class LocalSourceRuntime(
             val target = directory / "book.${fileName.substringAfterLast('.').lowercase()}"
             fileSystem.copy(source, target)
             val book = reader.read(target, format, fileName.substringBeforeLast('.'))
-            val item = LocalItem(id, book.title, fileName, format, size, now())
+            val item = LocalItem(id, book.title, fileName, format, size, now(), CHAPTER_SCHEME)
             fileSystem.write(directory / META) { writeUtf8(json.encodeToString(LocalItem.serializer(), item)) }
             mutex.withLock { books[id] = book }
             content(item, book)
@@ -182,7 +188,9 @@ class LocalSourceRuntime(
 
     private suspend fun book(item: LocalItem): LocalBook {
         mutex.withLock { books[item.id] }?.let { return it }
-        val book = withContext(Dispatchers.IO) { reader.read(file(item), item.format, item.title) }
+        val book = withContext(Dispatchers.IO) {
+            reader.read(file(item), item.format, item.title, splitSections = item.chapterScheme >= 2)
+        }
         mutex.withLock { books[item.id] = book }
         return book
     }
@@ -242,11 +250,16 @@ class LocalSourceRuntime(
     }
 
     /** The chapter's XHTML body, with its pictures extracted next to the work and referenced as file URLs. */
-    private fun epubChapter(item: LocalItem, document: String): SourceChapterContent {
+    private fun epubChapter(item: LocalItem, part: LocalChapter): SourceChapterContent {
+        val document = part.document ?: throw IllegalArgumentException("章节不存在")
         val file = file(item)
         val xhtml = reader.entry(file, document).decodeToString()
-        val body = Regex("<body[^>]*>(.*)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val whole = Regex("<body[^>]*>(.*)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
             .find(xhtml)?.groupValues?.get(1) ?: xhtml
+        // A section runs from its anchor element to the next section's; markup cut open there is tolerated by readers.
+        val start = part.section?.let { LocalBookReader.anchorPosition(whole, it) } ?: 0
+        val end = part.sectionEnd?.let { LocalBookReader.anchorPosition(whole, it) }?.takeIf { it >= start } ?: whole.length
+        val body = whole.substring(start, end)
         val assets = root / ITEMS / item.id.toString() / ASSETS
         val images = mutableListOf<SourceContentImage>()
         val html = Regex("<(img|image)\\b([^>]*?)(src|xlink:href|href)\\s*=\\s*([\"'])([^\"']+)\\4([^>]*)>",
@@ -262,7 +275,29 @@ class LocalSourceRuntime(
             images += SourceContentImage(url)
             "<img src=\"$url\">"
         }
-        return SourceChapterContent(html, images)
+        return SourceChapterContent(stylesheets(file, document, xhtml) + html, images)
+    }
+
+    /**
+     * The document's style sheets (linked files and `<style>` elements of its head) as one leading `<style>` element,
+     * so readers can apply the book's layout to the body.
+     */
+    private fun stylesheets(file: Path, document: String, xhtml: String): String {
+        val head = Regex("<head\\b[^>]*>([\\s\\S]*?)</head\\s*>", RegexOption.IGNORE_CASE)
+            .find(xhtml)?.groupValues?.get(1) ?: return ""
+        // Linked files and <style> elements, in the order the head lists them.
+        val sheets = mutableListOf<Pair<Int, String>>()
+        LocalXml.tags(head, "link").forEach { link ->
+            if (link["rel"]?.contains("stylesheet", ignoreCase = true) != true) return@forEach
+            val href = link["href"] ?: return@forEach
+            runCatching { reader.entry(file, resolveHref(document, href)).decodeToString() }
+                .getOrNull()?.let { sheets += link.start to it }
+        }
+        Regex("<style\\b[^>]*>([\\s\\S]*?)</style\\s*>", RegexOption.IGNORE_CASE)
+            .findAll(head).forEach { sheets += it.range.first to it.groupValues[1] }
+        val css = sheets.sortedBy { it.first }.joinToString("\n") { it.second }
+        // A style sheet never contains "</style>"; drop it in case one does, so it cannot end the element early.
+        return if (css.isBlank()) "" else "<style>" + css.replace("</style", "") + "</style>"
     }
 
     private fun textHtml(text: String): String = text.split('\n').map { it.trim().trim('\u3000') }
@@ -276,6 +311,9 @@ class LocalSourceRuntime(
     }
 
     companion object {
+        /** The [LocalItem.chapterScheme] of new imports. */
+        const val CHAPTER_SCHEME = 2
+
         /** Android's local source names (`LocalMangaSource`, `LocalNovelSource`). */
         val MANGA = SourceRef("LOCAL", "", "MANGA")
         val NOVEL = SourceRef("LOCAL_NOVEL", "", "NOVEL")

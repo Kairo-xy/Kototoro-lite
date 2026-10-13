@@ -72,7 +72,7 @@ internal fun resolveHref(base: String, href: String): String {
     return parts.joinToString("/")
 }
 
-private fun decodePercent(value: String): String {
+internal fun decodePercent(value: String): String {
     if ('%' !in value) return value
     val bytes = ArrayList<Byte>()
     var index = 0
