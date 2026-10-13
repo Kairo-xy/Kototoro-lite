@@ -58,26 +58,49 @@ internal class DoublePageSpreadModel private constructor(
     companion object {
         const val SPACER_KEY = Long.MIN_VALUE
 
-        fun create(displayItems: List<DoublePageDisplayItem>): DoublePageSpreadModel {
+        fun create(
+            displayItems: List<DoublePageDisplayItem>,
+            widePageIds: Set<Long> = emptySet(),
+        ): DoublePageSpreadModel {
             val count = displayItems.size
             if (count <= 0) return DoublePageSpreadModel(emptyList())
 
-            fun isWide(pos: Int): Boolean {
-                val item = displayItems.getOrNull(pos) ?: return false
-                val page = item.page ?: return false
-                // If a page is explicitly split or marked, handle accordingly; 
-                // otherwise treat normal single pages as standard width, and split/wide items independently.
+            // An unsplit page detected as wide always gets a spread to itself.
+            fun isWideSolo(pos: Int): Boolean {
+                val page = displayItems.getOrNull(pos)?.page ?: return false
+                return page.split == ReaderPageSplit.NONE && page.id in widePageIds
+            }
+
+            fun isSplitHalf(pos: Int): Boolean {
+                val page = displayItems.getOrNull(pos)?.page ?: return false
                 return page.split != ReaderPageSplit.NONE
+            }
+
+            // The two halves of one split wide page belong together on a single spread.
+            fun isSplitHalfPair(pos: Int): Boolean {
+                val first = displayItems.getOrNull(pos)?.page ?: return false
+                val second = displayItems.getOrNull(pos + 1)?.page ?: return false
+                return first.split != ReaderPageSplit.NONE &&
+                    second.split != ReaderPageSplit.NONE &&
+                    first.split != second.split &&
+                    first.id == second.id
             }
 
             val spreads = buildList {
                 var i = 0
                 while (i < count) {
-                    if (isWide(i) || displayItems[i].page == null) {
+                    if (displayItems[i].page == null || isWideSolo(i)) {
+                        add(DoublePageSpread(lowerPosition = i, upperPosition = i))
+                        i++
+                    } else if (isSplitHalfPair(i)) {
+                        add(DoublePageSpread(lowerPosition = i, upperPosition = i + 1))
+                        i += 2
+                    } else if (isSplitHalf(i)) {
+                        // Orphan half without its partner (chapter edge): keep it alone.
                         add(DoublePageSpread(lowerPosition = i, upperPosition = i))
                         i++
                     } else if (i + 1 < count) {
-                        if (isWide(i + 1) || displayItems[i + 1].page == null) {
+                        if (displayItems[i + 1].page == null || isWideSolo(i + 1) || isSplitHalf(i + 1)) {
                             add(DoublePageSpread(lowerPosition = i, upperPosition = i))
                             i++
                         } else {
@@ -117,14 +140,25 @@ internal fun resolvePageNavigationTarget(
     pageStep: Int,
 ): Int = currentPosition + delta * pageStep
 
+/** True when the spread is a single detected-wide page that should use the whole screen width. */
+internal fun DoublePageSpread.isFullWidthWidePage(
+    displayItems: List<DoublePageDisplayItem>,
+    widePageIds: Set<Long>,
+): Boolean {
+    if (lowerPosition != upperPosition) return false
+    val page = displayItems.getOrNull(lowerPosition)?.page ?: return false
+    return page.split == ReaderPageSplit.NONE && page.id in widePageIds
+}
+
 internal fun resolveDoublePageNavigationTarget(
     displayItems: List<DoublePageDisplayItem>,
     currentPosition: Int,
     delta: Int,
+    widePageIds: Set<Long> = emptySet(),
 ): Int? {
     val currentDisplayPosition = displayItems.indexOfFirst { it.originalPosition == currentPosition }
     if (currentDisplayPosition < 0) return null
-    val spreadModel = DoublePageSpreadModel.create(displayItems)
+    val spreadModel = DoublePageSpreadModel.create(displayItems, widePageIds)
     val currentSpreadIndex = spreadModel.spreadIndexForPage(currentDisplayPosition)
     val targetSpread = spreadModel.spreads.getOrNull(currentSpreadIndex + delta) ?: return null
     val targetPositions = targetSpread.positions.mapNotNull { position ->
