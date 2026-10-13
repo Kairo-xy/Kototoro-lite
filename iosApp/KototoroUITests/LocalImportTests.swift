@@ -540,11 +540,19 @@ final class LocalImportTests: XCTestCase {
         selectReaderMode("条漫")
         let canvas = app.scrollViews["reader.canvas"]
         XCTAssertTrue(canvas.waitForExistence(timeout: 10), app.debugDescription)
+        // The reader resumes the history of earlier runs; start from page 1 (an unchanged slider value is a no-op).
+        app.sliders["reader.progress"].adjust(toNormalizedSliderPosition: 1)
+        app.sliders["reader.progress"].adjust(toNormalizedSliderPosition: 0)
+        let start = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.app.staticTexts["reader.currentPage"].value as? String == "1" && abs(self.readingOffset(canvas)) < 5
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [start], timeout: 10), .completed, "\(canvas.value ?? "")")
         canvas.swipeUp()
         let moved = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             self.readingOffset(canvas) > 300
         }, object: nil)
         wait(for: [moved], timeout: 10)
+        XCTAssertEqual(app.staticTexts["reader.currentPage"].value as? String, "1")
         let saved = readingOffset(canvas)
         let bookmark = app.buttons["reader.bookmark"]
         // Repeated test runs may already have a bookmark on this page.

@@ -103,7 +103,7 @@ UI 首轮未更新活动章节，补充原生分页几何确认后，章名、�
 
 验证：`IosProductTest` Native **20 项通过**（新增连续窗口追加不移动条带、右到左追加会移动、短尾页为最后可见页）。UI 新增 `testContinuousStripScrollsIntoNeighborChapters`（三章普通滚动 01→02→03 并回到 02 第 3 页，窗口 6/9 页，像素核对）与 `testContinuousStripEndEntersAShortNextChapter`（长页后的短 02 在末端成为阅读章、末章禁用下一章），均通过。完整 `LocalImportTests` + `ReaderSettingsTests` 一轮 25 项中 23 项通过；`testPreviousChapterButtonOpensTheChapterStart` 随后单独重跑通过。
 
-测试辅助修正：上一批在位置描述末尾加了“，窗口 N 页”，`readingOffset` 仍把“页内偏移 ”之后整段转 Int，恒得 -1，令 `abs(offset) < 5` 类断言假通过、`> 300` 类断言必然失败。改为只读数字后，暴露两个基线即存在的问题（已用 HEAD 版 `SourceReaderView.swift` 复现）：上一章按钮恢复到历史页（本批已修）；`testLongPageBookmarkRestoresItsOffset` 点书签后停在页内偏移 5757 而非保存值，单章夹具、与窗口改动无关，**仍未修复**，需另查书签记录/列表首项。
+测试辅助修正：上一批在位置描述末尾加了“，窗口 N 页”，`readingOffset` 仍把“页内偏移 ”之后整段转 Int，恒得 -1，令 `abs(offset) < 5` 类断言假通过、`> 300` 类断言必然失败。改为只读数字后，暴露两个基线即存在的问题（已用 HEAD 版 `SourceReaderView.swift` 复现）：上一章按钮恢复到历史页（本批已修）；`testLongPageBookmarkRestoresItsOffset` 点书签后停在页内偏移 5757 而非保存值。追踪与库内记录确认这是测试状态依赖而非应用缺陷：阅读器按前次运行的历史续读到第 2 页，新书签正确存为第 2 页（偏移 336），测试却按“第 1 页”点中更早运行留下的第 1 页旧书签（偏移 5757）。用例改为先用滑条回到第 1 页起点并断言页码后再加书签；在长页历史残留后与单独重复运行均通过。
 
 仍未覆盖：横向连续在真实手势下的前插定位只有共享几何测试；真机滚动中追加的流畅度、内存峰值未测。
 
