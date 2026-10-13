@@ -123,7 +123,12 @@ final class SourceReaderModel: ObservableObject {
             preloadedPages = nil
             // A preload that failed is asked again, so its error is the source's current one.
             let early = try? await preloaded?.value
-            let result = try await early ?? ReaderDownloads.pages(runtime: runtime, content: content, chapter: selected)
+            let result: [IosSourcePage]
+            if let early {
+                result = early
+            } else {
+                result = try await ReaderDownloads.pages(runtime: runtime, content: content, chapter: selected)
+            }
             let saved = try await library?.position(content: content)
             try Task.checkCancellation()
             guard request == token else { return }
