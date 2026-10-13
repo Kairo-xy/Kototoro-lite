@@ -88,37 +88,43 @@ object PagedSpreadResolver {
 
         val result = mutableListOf<List<PagedPageSpec>>()
         var i = 0
-        while (i < specs.size) {
-            val first = specs[i]
-            val isChapterStartInSpecs = i == 0 || specs[i - 1].chapterId != first.chapterId
-            val coverOffset = if (config.isCoverOffset) 1 else 0
-            val isSecondPageOfPairInChapter = isChapterStartInSpecs &&
-                first.chapterPageIndex != 0 &&
-                (first.chapterPageIndex + coverOffset) % 2 != 0
+        val count = specs.size
 
-            if (isSecondPageOfPairInChapter || isSoloPage(first, config)) {
+        while (i < count) {
+            val first = specs[i]
+
+            // Condition 1: Cover offset page sits alone if cover offset is enabled
+            val isCoverPage = config.isCoverOffset && i == 0
+            if (isCoverPage || isSoloPage(first, config)) {
                 result.add(listOf(first))
                 i++
                 continue
             }
 
-            // Candidate pair
-            if (i + 1 < specs.size) {
+            // Check if there is a next page available to form a spread
+            if (i + 1 < count) {
                 val second = specs[i + 1]
-                val canPair = second.chapterId == first.chapterId &&
-                    !isSoloPage(second, config) &&
-                    second.spreadBehavior != SpreadBehavior.SOLO
 
-                if (canPair) {
-                    result.add(listOf(first, second))
-                    i += 2
+                // Chapter isolation: adjacent pages of different chapters must never combine
+                val isDifferentChapter = first.chapterId != second.chapterId
+                
+                // If the next page is a solo/wide page, the current page must sit alone first
+                val isNextSolo = isSoloPage(second, config)
+
+                if (isDifferentChapter || isNextSolo) {
+                    result.add(listOf(first))
+                    i++
                     continue
                 }
-            }
 
-            // Odd or unpairable page at chapter end
-            result.add(listOf(first))
-            i++
+                // Pair normal pages together and restart pairing fresh after this spread
+                result.add(listOf(first, second))
+                i += 2
+            } else {
+                // Leftover single page at the end sits alone
+                result.add(listOf(first))
+                i++
+            }
         }
         return result
     }
