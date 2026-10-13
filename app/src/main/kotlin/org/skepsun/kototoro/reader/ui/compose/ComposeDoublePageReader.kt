@@ -35,6 +35,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
@@ -61,6 +62,16 @@ import org.skepsun.kototoro.core.prefs.ReaderBackground
 import org.skepsun.kototoro.core.prefs.ReaderAnimation
 import org.skepsun.kototoro.reader.core.ZoomMode
 import org.skepsun.kototoro.reader.ui.pager.ReaderPage
+
+/**
+ * Pushes the two pages of a spread against the center fold so no letterbox gap appears between them.
+ * [index] is the visual (left-to-right) slot. Single-page spreads (cover/solo) keep the default centering.
+ */
+private fun spreadFoldAlignment(spread: DoublePageSpread, index: Int): Alignment? = when {
+    spread.lowerPosition == spread.upperPosition -> null
+    index == 0 -> Alignment.CenterEnd
+    else -> Alignment.CenterStart
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -440,12 +451,13 @@ fun ComposeDoublePageReader(
         Row(
             modifier = modifier.background(Color(spreadBackground)),
         ) {
-            orderedPositions.forEach { position ->
+            orderedPositions.forEachIndexed { index, position ->
                 val page = displayItems[position].page
                 if (page == null) {
                     Box(modifier = Modifier.weight(1f).fillMaxSize())
                 } else {
                     ComposeReaderPage(
+                        pageAlignment = spreadFoldAlignment(spread, index),
                         page = page,
                         imageLoader = imageLoader,
                         imagePipeline = imagePipeline,
@@ -702,12 +714,13 @@ fun ComposeDoublePageReader(
                 Row(
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    orderedPositions.forEach { position ->
+                    orderedPositions.forEachIndexed { index, position ->
                         val page = displayItems[position].page
                         if (page == null) {
                             Box(modifier = Modifier.weight(1f).fillMaxSize())
                         } else {
                             ComposeReaderPage(
+                                pageAlignment = spreadFoldAlignment(spread, index),
                                 page = page,
                                 imageLoader = imageLoader,
                                 imagePipeline = imagePipeline,
