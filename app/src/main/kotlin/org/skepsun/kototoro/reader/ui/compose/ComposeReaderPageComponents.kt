@@ -113,6 +113,7 @@ internal fun ComposeReaderPage(
     pageBackgroundColorOverride: Int? = null,
     onAutoBackgroundResolved: (Int) -> Unit = {},
     onZoomedChanged: (Boolean) -> Unit = {},
+    pageAlignment: Alignment? = null,
     modifier: Modifier = Modifier,
 ) {
     var retryKey by remember(page.readerKey) { mutableIntStateOf(0) }
@@ -235,6 +236,7 @@ internal fun ComposeReaderPage(
                 onZoomedChanged = onZoomedChanged,
                 onSubsamplingError = { forceCoil = true },
                 onImageError = { renderError = it },
+                pageAlignment = pageAlignment,
                 modifier = Modifier.fillMaxSize(),
             )
             is ComposeReaderImageState.Enhancing -> PagedReaderImage(
@@ -261,6 +263,7 @@ internal fun ComposeReaderPage(
                 onZoomedChanged = onZoomedChanged,
                 onSubsamplingError = { forceCoil = true },
                 onImageError = { renderError = it },
+                pageAlignment = pageAlignment,
                 modifier = Modifier.fillMaxSize(),
             )
             is ComposeReaderImageState.EnhancedReady -> PagedReaderImage(
@@ -284,6 +287,7 @@ internal fun ComposeReaderPage(
                 onZoomedChanged = onZoomedChanged,
                 onSubsamplingError = { forceCoil = true },
                 onImageError = { renderError = it },
+                pageAlignment = pageAlignment,
                 modifier = Modifier.fillMaxSize(),
             )
             is ComposeReaderImageState.Failed -> ReaderPageError(
@@ -296,7 +300,6 @@ internal fun ComposeReaderPage(
         }
     }
 }
-
 @Composable
 internal fun ReaderPageError(
     cause: Throwable,
@@ -325,9 +328,9 @@ internal fun ReaderPageError(
  * What a scene host draws over one page while the image pipeline has nothing to show for it.
  */
 internal enum class SceneReaderPageOverlay {
-	NONE,
-	LOADING,
-	ERROR,
+    NONE,
+    LOADING,
+    ERROR,
 }
 
 /**
@@ -345,15 +348,15 @@ internal enum class SceneReaderPageOverlay {
  * a blank placeholder gives no sign that anything is happening.
  */
 internal fun resolveSceneReaderPageOverlay(
-	state: ReaderImageLoadState?,
-	hasRenderableAsset: Boolean,
-	unresolvedIsLoading: Boolean = false,
+    state: ReaderImageLoadState?,
+    hasRenderableAsset: Boolean,
+    unresolvedIsLoading: Boolean = false,
 ): SceneReaderPageOverlay = when {
-	state is ReaderImageLoadState.Failed -> SceneReaderPageOverlay.ERROR
-	hasRenderableAsset -> SceneReaderPageOverlay.NONE
-	state is ReaderImageLoadState.Loading -> SceneReaderPageOverlay.LOADING
-	state == null && unresolvedIsLoading -> SceneReaderPageOverlay.LOADING
-	else -> SceneReaderPageOverlay.NONE
+    state is ReaderImageLoadState.Failed -> SceneReaderPageOverlay.ERROR
+    hasRenderableAsset -> SceneReaderPageOverlay.NONE
+    state is ReaderImageLoadState.Loading -> SceneReaderPageOverlay.LOADING
+    state == null && unresolvedIsLoading -> SceneReaderPageOverlay.LOADING
+    else -> SceneReaderPageOverlay.NONE
 }
 
 /**
@@ -365,41 +368,41 @@ internal fun resolveSceneReaderPageOverlay(
  */
 @Composable
 internal fun SceneReaderPageLoadOverlay(
-	pipeline: ReaderImagePipeline,
-	pageId: PageId,
-	page: ReaderPage?,
-	onRetryError: (Throwable, retry: () -> Unit) -> Unit,
-	onShowErrorDetails: (Throwable, String?) -> Unit,
-	resolveErrorStringId: (Throwable) -> Int,
-	onRetry: () -> Unit,
-	modifier: Modifier = Modifier,
-	unresolvedIsLoading: Boolean = false,
+    pipeline: ReaderImagePipeline,
+    pageId: PageId,
+    page: ReaderPage?,
+    onRetryError: (Throwable, retry: () -> Unit) -> Unit,
+    onShowErrorDetails: (Throwable, String?) -> Unit,
+    resolveErrorStringId: (Throwable) -> Int,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier,
+    unresolvedIsLoading: Boolean = false,
 ) {
-	val states by pipeline.loadStates.collectAsStateWithLifecycle()
-	val assets by pipeline.assets.collectAsStateWithLifecycle()
-	val state = states[pageId]
-	when (resolveSceneReaderPageOverlay(state, assets.containsKey(pageId), unresolvedIsLoading)) {
-		SceneReaderPageOverlay.NONE -> Unit
-		// The same indicator as the legacy readers draw on a loading page.
-		SceneReaderPageOverlay.LOADING -> Box(modifier) {
-			ReaderPageLoading((state as? ReaderImageLoadState.Loading)?.progress)
-		}
-		SceneReaderPageOverlay.ERROR -> {
-			// Guarded by resolveSceneReaderPageOverlay above.
-			val failure = state as ReaderImageLoadState.Failed
-			Surface(
-				modifier = modifier.padding(24.dp),
-				shape = MaterialTheme.shapes.medium,
-			) {
-				ReaderPageError(
-					cause = failure.cause,
-					onRetry = { onRetryError(failure.cause, onRetry) },
-					onShowDetails = { onShowErrorDetails(failure.cause, page?.url) },
-					resolveStringId = resolveErrorStringId(failure.cause),
-				)
-			}
-		}
-	}
+    val states by pipeline.loadStates.collectAsStateWithLifecycle()
+    val assets by pipeline.assets.collectAsStateWithLifecycle()
+    val state = states[pageId]
+    when (resolveSceneReaderPageOverlay(state, assets.containsKey(pageId), unresolvedIsLoading)) {
+        SceneReaderPageOverlay.NONE -> Unit
+        // The same indicator as the legacy readers draw on a loading page.
+        SceneReaderPageOverlay.LOADING -> Box(modifier) {
+            ReaderPageLoading((state as? ReaderImageLoadState.Loading)?.progress)
+        }
+        SceneReaderPageOverlay.ERROR -> {
+            // Guarded by resolveSceneReaderPageOverlay above.
+            val failure = state as ReaderImageLoadState.Failed
+            Surface(
+                modifier = modifier.padding(24.dp),
+                shape = MaterialTheme.shapes.medium,
+            ) {
+                ReaderPageError(
+                    cause = failure.cause,
+                    onRetry = { onRetryError(failure.cause, onRetry) },
+                    onShowDetails = { onShowErrorDetails(failure.cause, page?.url) },
+                    resolveStringId = resolveErrorStringId(failure.cause),
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -480,6 +483,7 @@ private fun PagedReaderImage(
     onZoomedChanged: (Boolean) -> Unit,
     onSubsamplingError: () -> Unit,
     onImageError: (Throwable) -> Unit,
+    pageAlignment: Alignment? = null,
     modifier: Modifier = Modifier,
 ) {
     if (isAnimated) {
@@ -514,6 +518,7 @@ private fun PagedReaderImage(
             onImageSizeResolved = onImageSizeResolved,
             onImageError = { onSubsamplingError() },
             onZoomedChanged = onZoomedChanged,
+            contentAlignmentOverride = pageAlignment,
             modifier = modifier,
         )
     } else {
