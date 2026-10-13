@@ -35,6 +35,8 @@ data class SyncSettingsUiState(
     val googleDriveLastSyncSummary: String?,
     val googleDriveErrorSummary: String?,
     val isGoogleDriveSyncing: Boolean,
+    val googleDriveSyncStage: String? = null,
+    val isGoogleDriveSettingsSyncEnabled: Boolean = true,
 )
 
 @Composable
@@ -51,6 +53,7 @@ fun SyncSettingsScreen(
     onGoogleDriveIntervalChange: (Int) -> Unit,
     onGoogleDriveWifiOnlyChange: (Boolean) -> Unit,
     onGoogleDriveSyncOnStartChange: (Boolean) -> Unit,
+    onGoogleDriveSettingsSyncEnabledChange: (Boolean) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var isDeleteRemoteDialogVisible by rememberSaveable { mutableStateOf(false) }
@@ -108,7 +111,8 @@ fun SyncSettingsScreen(
                                 title = stringResource(R.string.sync_now),
                                 iconRes = R.drawable.ic_cloud_upload,
                                 summary = when {
-                                    state.isGoogleDriveSyncing -> stringResource(R.string.sync_syncing)
+                                    state.isGoogleDriveSyncing -> stringResource(R.string.sync_syncing) +
+                                        (state.googleDriveSyncStage?.let { " – $it" } ?: "")
                                     state.googleDriveErrorSummary != null -> state.googleDriveErrorSummary
                                     state.googleDriveLastSyncSummary != null -> stringResource(
                                         R.string.sync_last,
@@ -153,6 +157,16 @@ fun SyncSettingsScreen(
                                 summary = stringResource(R.string.sync_on_start_summary),
                                 enabled = state.isGoogleDriveEnabled,
                                 onCheckedChange = onGoogleDriveSyncOnStartChange,
+                            )
+                        }
+                        item {
+                            SettingsSwitchPreference(
+                                title = stringResource(R.string.sync_settings_enabled_title),
+                                iconRes = R.drawable.ic_settings,
+                                checked = state.isGoogleDriveSettingsSyncEnabled,
+                                summary = stringResource(R.string.sync_settings_enabled_summary),
+                                enabled = state.isGoogleDriveEnabled,
+                                onCheckedChange = onGoogleDriveSettingsSyncEnabledChange,
                             )
                         }
                         item {

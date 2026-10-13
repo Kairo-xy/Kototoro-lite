@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -88,9 +89,11 @@ class GoogleDriveSyncRepository @Inject constructor(
     private val ireaderExtensionManager: Lazy<IReaderExtensionManager>,
     private val tsundokuExtensionManager: Lazy<TsundokuExtensionManager>,
     private val cloudstreamRuntimeManager: Lazy<CloudstreamRuntimeManager>,
+    private val settingsStore: SettingsSyncStore,
 ) {
 
     val isSyncing = MutableStateFlow(false)
+    val syncStage = MutableStateFlow<String?>(null)
     private val syncMutex = Mutex()
     private val json = Json {
         encodeDefaults = true
@@ -120,6 +123,7 @@ class GoogleDriveSyncRepository @Inject constructor(
             return GoogleDriveSyncResult.AuthorizationRequired(GoogleDriveSyncAuthorizationException())
         }
         if (!syncMutex.tryLock()) {
+            Log.d(TAG, "sync skipped: another sync is already running")
             return GoogleDriveSyncResult.Success
         }
         isSyncing.value = true
@@ -149,6 +153,7 @@ class GoogleDriveSyncRepository @Inject constructor(
             Log.e(TAG, "sync failed: ${settings.lastSyncError}", e)
             GoogleDriveSyncResult.Error(settings.lastSyncError)
         } finally {
+            syncStage.value = null
             isSyncing.value = false
             syncMutex.unlock()
         }
@@ -158,21 +163,33 @@ class GoogleDriveSyncRepository @Inject constructor(
         if (!settings.isSyncEnabled) {
             return GoogleDriveSyncResult.Disabled
         }
-        return try {
-            val token = auth.requireAccessToken()
-            api.findCurrentSyncFiles(token).ifEmpty { api.findWorkV2SyncFiles(token) }.forEach { file ->
-                deleteRemoteFileBestEffort(token, file.id)
+        return syncMutex.withLock {
+            try {
+                val token = auth.requireAccessToken()
+                var failedCount = 0
+                api.findCurrentSyncFiles(token).ifEmpty { api.findWorkV2SyncFiles(token) }.forEach { file ->
+                    if (!deleteRemoteFileReporting(token, file.id)) {
+                        failedCount++
+                    }
+                }
+                if (failedCount > 0) {
+                    GoogleDriveSyncResult.Error(
+                        context.getString(R.string.sync_remote_delete_incomplete, failedCount),
+                        retryable = true,
+                    )
+                } else {
+                    settings.lastSyncTimestamp = 0L
+                    settings.lastSyncError = null
+                    settings.isDirty = false
+                    GoogleDriveSyncResult.Success
+                }
+            } catch (e: GoogleDriveSyncAuthorizationException) {
+                GoogleDriveSyncResult.AuthorizationRequired(e)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                GoogleDriveSyncResult.Error(e.message)
             }
-            settings.lastSyncTimestamp = 0L
-            settings.lastSyncError = null
-            settings.isDirty = false
-            GoogleDriveSyncResult.Success
-        } catch (e: GoogleDriveSyncAuthorizationException) {
-            GoogleDriveSyncResult.AuthorizationRequired(e)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            GoogleDriveSyncResult.Error(e.message)
         }
     }
 
@@ -213,6 +230,7 @@ class GoogleDriveSyncRepository @Inject constructor(
             Log.e(TAG, "legacy sync import failed: ${settings.lastSyncError}", e)
             GoogleDriveSyncResult.Error(settings.lastSyncError)
         } finally {
+            syncStage.value = null
             isSyncing.value = false
             syncMutex.unlock()
         }
@@ -310,7 +328,44 @@ class GoogleDriveSyncRepository @Inject constructor(
             files.filter { it.id != fileId && it.id in decodedIds }.forEach { duplicate ->
                 deleteRemoteFileBestEffort(token, duplicate.id)
             }
+            syncSettings(token)
             return unrestoredExtensions
+        }
+    }
+
+    private suspend fun syncSettings(token: String) {
+        if (!settings.isSettingsSyncEnabled) return
+        try {
+            val files = api.findSettingsSyncFiles(token)
+            var remoteStores: Map<String, Map<String, SettingEntry>> = emptyMap()
+            for (file in files) {
+                val bytes = api.download(token, file.id)
+                val snapshot = runCatching {
+                    json.decodeFromString(SettingsSnapshot.serializer(), bytes.decodeToString())
+                }.getOrNull()
+                if (snapshot == null) {
+                    Log.w(TAG, "skipped unreadable settings snapshot ${file.id}")
+                    continue
+                }
+                remoteStores = SettingsSyncMerger.mergeStores(remoteStores, snapshot.stores)
+            }
+            val now = System.currentTimeMillis()
+            val local = settingsStore.buildLocal(now)
+            val merged = SettingsSyncMerger.mergeStores(local, remoteStores)
+            val applied = settingsStore.apply(merged)
+            Log.d(TAG, "settings sync applied=$applied files=${files.size}")
+            val payload = json.encodeToString(
+                SettingsSnapshot.serializer(),
+                SettingsSnapshot(deviceId = settings.deviceId, syncedAt = now, stores = merged),
+            ).encodeToByteArray()
+            val fileId = api.upload(token, payload, files.firstOrNull()?.id, SETTINGS_FILE_NAME)
+            files.filter { it.id != fileId }.forEach { duplicate ->
+                deleteRemoteFileBestEffort(token, duplicate.id)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "settings sync failed: ${e.message}", e)
         }
     }
 
@@ -370,7 +425,21 @@ class GoogleDriveSyncRepository @Inject constructor(
         }
     }
 
+    /** Like [deleteRemoteFileBestEffort], but reports failure so the caller can surface it. */
+    private suspend fun deleteRemoteFileReporting(token: String, fileId: String): Boolean {
+        return try {
+            api.delete(token, fileId)
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "remote delete failed for $fileId: ${e.message}", e)
+            false
+        }
+    }
+
     private suspend fun <T> runSyncStep(name: String, block: suspend () -> T): T {
+        syncStage.value = name.substringBefore(' ')
         Log.d(TAG, "sync step start: $name")
         return try {
             block().also {
@@ -1051,6 +1120,7 @@ class GoogleDriveSyncRepository @Inject constructor(
     private companion object {
         const val MAX_CONFLICT_RETRIES = 3
         const val TAG = "GoogleDriveSync"
+        const val SETTINGS_FILE_NAME = "kototoro_sync_settings_v1.json"
         private const val SqliteBindParameterChunkSize = 500
         private const val GOOGLE_ACCOUNT_TYPE = "com.google"
     }
