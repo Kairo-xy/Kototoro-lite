@@ -151,6 +151,11 @@ npm run docs:build
 - `core-backup/` - 共享备份格式（KMP）：Kototoro 备份数据类（`backups/data/model`）、Mihon/Aniyomi/Usagi 格式模型与 protobuf 解码（`backups/external`，入口 `readExternalBackupBytes`、`decodeMihonOrAniyomiBackup`）；包名不变。依赖 Android 的部分留在 `app`：`Uri` 读取与 Venera(SQLite) 解码（`ExternalBackupDecoder`）、导出服务、`BackupRepository`、`BackupIndex(...)` 工厂函数（需要 `BuildConfig`）
 - `reader-core/` - 阅读器几何/场景语义（KMP，纯 Kotlin）；PagedCameraTransform 提供独立于进度的
   指针锚点缩放/平移限界，复用 PagedPanBoundsResolver 与 PagedSlot 视口反算，Windows 已消费。
+- `reader-novel/` - 小说阅读器共享模型/算法（KMP，纯 Kotlin，含 iOS 目标）：章节文档块 `NovelDocumentBlock`、段落切分、
+  图片占位解析、标题行判定、翻译模型、分页切行 `splitNovelPageLineRanges`、阅读模式枚举，以及 HTML→文本分词转换
+  `novelHtmlToText`（Android EPUB 与 iOS 阅读器共用；Android 在线正文仍走 `NovelContentLoader` 旧路径）、书籍样式
+  `novelHtmlToStyledText`/`NovelStyleSheet`（CSS 子集，纯文本不变）、进度换算与分页源；包名仍为
+  `org.skepsun.kototoro.reader.novel`。测量/渲染/存储/资源留在平台；测试在 commonTest，JVM 与 iOS 模拟器都跑。
 - `core-source/` - 共享源契约（KMP）：独立协议 DTO、`SourceRuntime`、带版本/请求 ID 的 JSON
   `SourceEndpoint` 与 `SourceProtocolClient`。64 位 ID/时间戳用十进制字符串，保留 `sourceData`、
   页面上下文、筛选和分页语义；不依赖 parser JVM ABI 或 DI。`app/core/source` 的 Android 适配器
