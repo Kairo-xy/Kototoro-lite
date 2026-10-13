@@ -132,6 +132,18 @@ object PagedSpreadResolver {
     private fun isSoloPage(spec: PagedPageSpec, config: PagedSpreadConfig): Boolean {
         if (spec.spreadBehavior == SpreadBehavior.SOLO) return true
         if (config.isCoverOffset && spec.chapterPageIndex == 0) return true
+        
+        // Extract aspect ratio to robustly catch pre-combined double spreads
+        val ratio = when (spec.geometryHint) {
+            is PageGeometryHint.Exact -> if (spec.geometryHint.height > 0) spec.geometryHint.width.toFloat() / spec.geometryHint.height.toFloat() else 1f
+            is PageGeometryHint.AspectRatio -> spec.geometryHint.ratio
+            is PageGeometryHint.Estimated -> spec.geometryHint.ratio
+        }
+
+        if (ratio > 1.25f) {
+            return true
+        }
+
         if (spec.segment == PageSegment.FULL && WidePagePolicy.isWidePage(spec.geometryHint)) {
             return true
         }
@@ -188,14 +200,14 @@ object PagedSpreadResolver {
             Quad(firstSpec, fittedFirst, secondSpec, fittedSecond)
         }
 
-        val leftSlotLeft = 0f
-        val leftPageLeftInSlot = leftSlotLeft + (halfWidth - leftFitted.width).coerceAtLeast(0f) / 2f
+        // Anchor pages toward the center fold to eliminate the middle gap
+        val leftPageLeftInSlot = halfWidth - leftFitted.width
         val leftPageTopInSlot = (viewportHeight - leftFitted.height).coerceAtLeast(0f) / 2f
         val leftBoundsInSlot = FloatRect.fromLtwh(leftPageLeftInSlot, leftPageTopInSlot, leftFitted.width, leftFitted.height)
         val leftSceneBounds = leftBoundsInSlot.translate(slotBounds.left, slotBounds.top)
 
         val rightSlotLeft = halfWidth + config.pageSpacingPx.toFloat()
-        val rightPageLeftInSlot = rightSlotLeft + (halfWidth - rightFitted.width).coerceAtLeast(0f) / 2f
+        val rightPageLeftInSlot = rightSlotLeft
         val rightPageTopInSlot = (viewportHeight - rightFitted.height).coerceAtLeast(0f) / 2f
         val rightBoundsInSlot = FloatRect.fromLtwh(rightPageLeftInSlot, rightPageTopInSlot, rightFitted.width, rightFitted.height)
         val rightSceneBounds = rightBoundsInSlot.translate(slotBounds.left, slotBounds.top)
