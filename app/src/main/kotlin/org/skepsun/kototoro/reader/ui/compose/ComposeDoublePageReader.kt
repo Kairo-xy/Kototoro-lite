@@ -31,6 +31,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -100,6 +101,7 @@ fun ComposeDoublePageReader(
     isPreloadReductionEnabled: Boolean = false,
     zoomMode: ZoomMode = ZoomMode.FIT_CENTER,
     isCropEnabled: Boolean = false,
+    widePageIds: Set<Long> = emptySet(),
     pageOverlay: @Composable BoxScope.() -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -107,8 +109,11 @@ fun ComposeDoublePageReader(
     val displayItems = remember(displayedPages, coverPage) {
         buildDoublePageDisplayItems(displayedPages, coverPage = coverPage)
     }
+    val currentWidePageIds by rememberUpdatedState(widePageIds)
     val displayPagePositions = remember(displayItems) { displayItems.map { it.originalPosition } }
-    val spreadModel = remember(displayItems) { DoublePageSpreadModel.create(displayItems) }
+    val spreadModel = remember(displayItems, widePageIds) {
+        DoublePageSpreadModel.create(displayItems, widePageIds)
+    }
     val spreads = spreadModel.spreads
     LaunchedEffect(displayedPages, coverPage, reverseLayout) {
         PagedShadowValidator.sampleRuntimeParity(
@@ -288,7 +293,7 @@ fun ComposeDoublePageReader(
             val updatedPageKeys = updatedDisplayItems.map {
                 it.page?.readerKey ?: DoublePageSpreadModel.SPACER_KEY
             }
-            val updatedSpreadModel = DoublePageSpreadModel.create(updatedDisplayItems)
+            val updatedSpreadModel = DoublePageSpreadModel.create(updatedDisplayItems, currentWidePageIds)
             val anchorSpreadIndex = updatedSpreadModel.resolveAnchorSpreadIndex(
                 pageKeys = updatedPageKeys,
                 anchorPageKey = visibleAnchorPageKey,
@@ -308,7 +313,7 @@ fun ComposeDoublePageReader(
         }
     }
 
-    LaunchedEffect(pageKeys, requestedPage) {
+    LaunchedEffect(pageKeys, spreadModel, requestedPage) {
         if (requestedPage == null && !isRestoringAnchor) {
             val anchorSpreadIndex = spreadModel.resolveAnchorSpreadIndex(
                 pageKeys = pageKeys,
@@ -487,7 +492,9 @@ fun ComposeDoublePageReader(
                     )
                 }
             }
-            if (spread.lowerPosition == spread.upperPosition) {
+            if (spread.lowerPosition == spread.upperPosition &&
+                !spread.isFullWidthWidePage(displayItems, widePageIds)
+            ) {
                 Box(modifier = Modifier.weight(1f).fillMaxSize())
             }
         }
@@ -750,9 +757,11 @@ fun ComposeDoublePageReader(
                             )
                         }
                     }
-                    if (spread.lowerPosition == spread.upperPosition) {
-                    Box(modifier = Modifier.weight(1f).fillMaxSize())
-                }
+                    if (spread.lowerPosition == spread.upperPosition &&
+                        !spread.isFullWidthWidePage(displayItems, widePageIds)
+                    ) {
+                        Box(modifier = Modifier.weight(1f).fillMaxSize())
+                    }
             }
                 when (pageAnimation) {
                     ReaderAnimation.SIMULATION -> ComposeReaderSimulationPageShadow(transform)
