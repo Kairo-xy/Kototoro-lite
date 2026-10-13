@@ -541,6 +541,7 @@ internal class ComposeReaderController(
                 ),
                 currentPosition = basePosition,
                 delta = delta,
+                widePageIds = viewModel.widePageIdsFlow.value,
             ) ?: return
         } else {
             resolvePageNavigationTarget(basePosition, delta, pageStep = 1)
