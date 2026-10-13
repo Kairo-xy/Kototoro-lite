@@ -133,14 +133,14 @@ object PagedSpreadResolver {
         if (spec.spreadBehavior == SpreadBehavior.SOLO) return true
         if (config.isCoverOffset && spec.chapterPageIndex == 0) return true
         
-        // Extract aspect ratio to robustly catch pre-combined double spreads
+        // Extract aspect ratio to robustly catch pre-combined double spreads (> 1.15)
         val ratio = when (spec.geometryHint) {
             is PageGeometryHint.Exact -> if (spec.geometryHint.height > 0) spec.geometryHint.width.toFloat() / spec.geometryHint.height.toFloat() else 1f
             is PageGeometryHint.AspectRatio -> spec.geometryHint.ratio
             is PageGeometryHint.Estimated -> spec.geometryHint.ratio
         }
 
-        if (ratio > 1.25f) {
+        if (ratio > 1.15f) {
             return true
         }
 
