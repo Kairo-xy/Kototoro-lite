@@ -395,5 +395,9 @@ class IosReader {
         const val MAXIMUM_DIMENSION = 16384
         const val MINIMUM_ZOOM = 1f
         const val MAXIMUM_ZOOM = 4f
+        /** Paged slots zoom as far as the shared camera allows (Android's paged reader, 5×). */
+        const val MAXIMUM_PAGE_ZOOM = PagedCameraTransform.MAX_SCALE
+        /** Android's double tap zooms an unzoomed page to 2× (`READER_DOUBLE_TAP_ZOOM_SCALE`). */
+        const val DOUBLE_TAP_ZOOM = 2f
     }
 }

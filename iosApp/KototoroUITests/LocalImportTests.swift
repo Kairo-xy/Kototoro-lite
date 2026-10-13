@@ -151,6 +151,144 @@ final class LocalImportTests: XCTestCase {
         attach("三章窗口裁剪保留实际画面和章内页码")
     }
 
+    /// Page-by-page drags through a longer chapter enter the next chapter at its first page (not wherever the old
+    /// window's scroll offset lands once the window is rebuilt around the new chapter), and dragging back returns to
+    /// the previous chapter's last page.
+    @MainActor
+    func testPagedDragsAcrossLongChaptersKeepTheChapterLocalPage() throws {
+        importFile(source: "LOCAL", file: "fixture_reader_paged", reuse: true)
+        XCTAssertTrue(app.staticTexts["details.title"].waitForExistence(timeout: 30))
+        _ = revealChapter(in: app, timeout: 30)
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "chapter.", "01"))
+            .firstMatch.tap()
+        XCTAssertTrue(app.images["reader.image"].firstMatch.waitForExistence(timeout: 30))
+        selectReaderMode("默认（从左到右）")
+        selectReaderAnimation("禁用")
+        let canvas = app.scrollViews["reader.canvas"]
+        app.sliders["reader.progress"].adjust(toNormalizedSliderPosition: 0)
+        waitForPage("1")
+        for page in 2...8 {
+            dragPage(canvas, forward: true)
+            waitForPage("\(page)")
+        }
+        dragPage(canvas, forward: true)
+        waitForReaderChapter("02")
+        waitForPage("1")
+        dragPage(canvas, forward: true)
+        waitForPage("2")
+        dragPage(canvas, forward: false)
+        waitForPage("1")
+        dragPage(canvas, forward: false)
+        waitForReaderChapter("01")
+        waitForPage("8")
+        attach("长章节逐页拖动跨章保持章内页码")
+    }
+
+    /// A paged double tap zooms about the tapped point (the page is red/green/blue thirds: tapping the blue third
+    /// brings blue to the centre, where a centre zoom would keep green), a zoomed page pans instead of turning, and
+    /// back at fit the same drag turns the page.
+    @MainActor
+    func testPagedDoubleTapZoomsAtTheTapAndPansBeforeTurning() throws {
+        importFile(source: "LOCAL", file: "fixture_reader_zoom", reuse: true)
+        openFirstChapter(title: "fixture_reader_zoom")
+        XCTAssertTrue(app.images["reader.image"].firstMatch.waitForExistence(timeout: 30))
+        selectReaderMode("默认（从左到右）")
+        selectReaderAnimation("禁用")
+        let canvas = app.scrollViews["reader.canvas"]
+        app.sliders["reader.progress"].adjust(toNormalizedSliderPosition: 0)
+        waitForPage("1")
+        if app.buttons["reader.more"].exists { canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        XCTAssertTrue(waitForCentre("green"), "unzoomed centre")
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5)).doubleTap()
+        XCTAssertTrue(waitForCentre("blue"), "double tap did not zoom about the tapped point")
+        attach("双击按点放大")
+        // Zoomed: a drag pans the page (back towards its middle) and the page stays.
+        let from = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5))
+        from.press(forDuration: 0.05, thenDragTo: canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5)),
+                   withVelocity: .slow, thenHoldForDuration: 0.05)
+        XCTAssertTrue(waitForCentre("green"), "a zoomed drag did not pan the page")
+        XCTAssertTrue((canvas.value as? String)?.hasPrefix("第 1 页，") == true, "\(canvas.value ?? "")")
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).doubleTap()
+        XCTAssertTrue(waitForCentre("green"))
+        dragPage(canvas, forward: true)
+        waitForPage("2")
+    }
+
+    /// The vertical strip's double tap keeps the tapped point in place as the strip is laid out wider.
+    @MainActor
+    func testContinuousDoubleTapZoomsAtTheTap() throws {
+        importFile(source: "LOCAL", file: "fixture_reader_zoom", reuse: true)
+        openFirstChapter(title: "fixture_reader_zoom")
+        XCTAssertTrue(app.images["reader.image"].firstMatch.waitForExistence(timeout: 30))
+        selectReaderMode("条漫")
+        let canvas = app.scrollViews["reader.canvas"]
+        app.sliders["reader.progress"].adjust(toNormalizedSliderPosition: 0)
+        waitForPage("1")
+        if app.buttons["reader.more"].exists { canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap() }
+        XCTAssertTrue(waitForCentre("green"), "unzoomed centre")
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.3)).doubleTap()
+        XCTAssertTrue(waitForCentre("blue"), "double tap did not zoom the strip about the tapped point")
+        attach("条漫双击按点放大")
+        canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.3)).doubleTap()
+        XCTAssertTrue(waitForCentre("green"))
+    }
+
+    private func waitForCentre(_ colour: String) -> Bool {
+        let matches = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let pixel = self.screenPixel(x: 0.5, y: 0.5) else { return false }
+            let (red, green, blue) = (Int(pixel[0]), Int(pixel[1]), Int(pixel[2]))
+            switch colour {
+            case "red": return red > green + 80 && red > blue + 80
+            case "green": return green > red + 80 && green > blue + 80
+            default: return blue > red + 80 && blue > green + 80
+            }
+        }, object: nil)
+        return XCTWaiter.wait(for: [matches], timeout: 10) == .completed
+    }
+
+    private func screenPixel(x: CGFloat, y: CGFloat) -> [UInt8]? {
+        autoreleasepool {
+            guard let image = app.screenshot().image.cgImage,
+                  let pixel = image.cropping(to: CGRect(x: Int(CGFloat(image.width) * x),
+                                                        y: Int(CGFloat(image.height) * y), width: 1, height: 1)) else {
+                return nil
+            }
+            var bytes = [UInt8](repeating: 0, count: 4)
+            let drawn = bytes.withUnsafeMutableBytes { buffer -> Bool in
+                guard let context = CGContext(data: buffer.baseAddress, width: 1, height: 1, bitsPerComponent: 8,
+                                              bytesPerRow: 4, space: CGColorSpaceCreateDeviceRGB(),
+                                              bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+                context.draw(pixel, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+                return true
+            }
+            return drawn ? bytes : nil
+        }
+    }
+
+    /// A finger drag with a hold at its end, like a reader turning one page, rather than a fling.
+    private func dragPage(_ canvas: XCUIElement, forward: Bool) {
+        let start = canvas.coordinate(withNormalizedOffset: CGVector(dx: forward ? 0.8 : 0.2, dy: 0.5))
+        let end = canvas.coordinate(withNormalizedOffset: CGVector(dx: forward ? 0.2 : 0.8, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.05)
+        if !app.buttons["reader.more"].exists { canvas.tap() }
+    }
+
+    private func waitForPage(_ page: String) {
+        let current = app.staticTexts["reader.currentPage"]
+        let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            current.value as? String == page
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 10), .completed,
+                       "expected page \(page), got \(current.value ?? "nil") in \(app.buttons["reader.chapters"].label)")
+        let image = app.images.matching(NSPredicate(
+            format: "identifier == %@ AND label CONTAINS %@", "reader.image", "第 \(page) 页"
+        )).firstMatch
+        let shown = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            image.exists && abs(image.frame.midX - self.app.frame.midX) < 4
+        }, object: nil)
+        XCTAssertEqual(XCTWaiter.wait(for: [shown], timeout: 10), .completed, "page \(page) is not on screen")
+    }
+
     /// Continuous strips join complete neighbor chapters: plain scrolling enters 02 and 03 and returns to 02 without
     /// an explicit chapter switch, and the window stays bounded to three chapters.
     @MainActor

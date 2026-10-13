@@ -7,6 +7,8 @@
   * fixture_reader_horizontal.cbz — horizontal reading direction, zoom and anchored restore.
   * fixture_reader_pull_long.cbz — explicit previous-chapter last-page restore.
   * fixture_reader_window.cbz — bounded paging windows across three chapters.
+  * fixture_reader_paged.cbz — longer chapters for page-by-page drags across a chapter boundary.
+  * fixture_reader_zoom.cbz — red/green/blue thirds, to see where a paged double tap zooms.
 
 Usage: stage-picker-fixtures.py <simulator id>
 """
@@ -56,10 +58,11 @@ if not storages:
     sys.exit("No 'On My iPhone' storage yet: open the Files app (or save a file from the app) once first.")
 
 
-def png(width, height, rgb):
+def png(width, height, rgb, columns=None):
     def chunk(kind, data):
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
-    raw = b"".join(b"\x00" + bytes(rgb) * width for _ in range(height))
+    row = b"".join(bytes(columns[x * len(columns) // width]) for x in range(width)) if columns else bytes(rgb) * width
+    raw = b"".join(b"\x00" + row for _ in range(height))
     return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
 
@@ -95,6 +98,14 @@ for storage in storages:
         for chapter, color in [("01", (200, 60, 60)), ("02", (60, 60, 200)), ("03", (60, 200, 60))]:
             for page in range(1, 4):
                 archive.writestr(f"{chapter}/{page:03d}.png", png(600, 800, color))
+    with zipfile.ZipFile(os.path.join(storage, "fixture_reader_paged.cbz"), "w") as archive:
+        for chapter, color in [("01", (200, 60, 60)), ("02", (60, 60, 200)), ("03", (60, 200, 60))]:
+            for page in range(1, 9):
+                shade = tuple(max(0, value - page * 12) for value in color)
+                archive.writestr(f"{chapter}/{page:03d}.png", png(600, 900, shade))
+    with zipfile.ZipFile(os.path.join(storage, "fixture_reader_zoom.cbz"), "w") as archive:
+        archive.writestr("001.png", png(600, 900, None, [(200, 40, 40), (40, 200, 40), (40, 40, 200)]))
+        archive.writestr("002.png", png(600, 900, (90, 90, 90)))
     with open(os.path.join(storage, "fixture_novel.txt"), "wb") as file:
         file.write(novel.encode("gb18030"))
     print(storage)

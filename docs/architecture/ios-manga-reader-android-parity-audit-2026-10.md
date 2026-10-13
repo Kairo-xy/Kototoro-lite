@@ -340,3 +340,16 @@ Apple 提供 `XCTMemoryMetric` 测峰值/增长，以及动画/滚动 signpost �
 - 当前 iOS XCTest 包含小图 SHA/裁切与请求优先级测试；`IosProductTest` 检查 tile 非空和输出范围，未验证 Swift overlay 的显示坐标/实际解码峰值。全 Swift 测试源码未发现 `measure(...)`、`XCTMemoryMetric`、`XCTOSSignpostMetric` 性能基线。证据：[SourceImageFileTests.swift:46](../../iosApp/KototoroUITests/SourceImageFileTests.swift#L46)、[ImageLoadPolicyTests.swift:8](../../iosApp/KototoroUITests/ImageLoadPolicyTests.swift#L8)、[IosProductTest.kt:119](../../ios-shared/src/iosTest/kotlin/org/skepsun/kototoro/ios/IosProductTest.kt#L119)。
 - 本轮没有运行 iOS UI/真机性能采集，没有测得 FPS、峰值内存、温度、掉帧比例或跨平台性能差值。源码确定项、由机制推断的风险、待实测项已经分开标注。
 - 工程原则：研究只新增这一份文档；建议优先补全现有共享几何契约、平台资源所有权与确定回归夹具，避免平行阅读器/一对一抽象层；不增加依赖，不改变产品代码或 Git 分支/提交。
+
+## 2026-10-14 交互修复：缩放、双击、拖拽翻页与跨章
+
+| 问题 | 根因 | 处理 |
+| --- | --- | --- |
+| 放大后拖拽卡顿 | 分页缩放用 SwiftUI `MagnifyGesture`/`DragGesture` 改 `@State`，每帧重建页面并重算 `visibleTiles`、取消正在解码的 tile；拖拽同时也驱动外层分页 ScrollView。条漫的 `scrollOffset` 是 `@State`，每帧重渲染整个阅读器 | 分页槽改为 `ReaderPageZoom`：页面仍是 SwiftUI，缩放/平移交给原生 `UIScrollView`（SwiftUI 无原生缩放滚动视图），有惯性/回弹，放大后到边缘再把拖拽交给翻页器（对应 Android Telephoto 的未消费平移）。tile 只按停稳后的相机（及长距离平移时每 1/3 屏）重算。条漫滚动偏移改为非视图状态，tile 视口按 1/4 屏步进 |
+| 双击放大不跟随手指 | 分页双击只把 scale 设为 2，锚点固定在中心 | 双击按 Android：未放大时放大到 `DOUBLE_TAP_ZOOM`（2×）并保持触点不动，已放大时回到适配；最大倍率共用 `PagedCameraTransform.MAX_SCALE` |
+| 拖到一半页面被替换 | 拖动中按偏移四舍五入提交选中页，`scrollPosition(id:)` 绑定随之改变并程序化滚动；SwiftUI 也可能在原生分页回弹结束前报告 idle | 分页 ScrollView 去掉位置绑定，只用 proxy 移动；只在停稳（idle 且偏移连续两帧对齐页边界）后提交 |
+| 末页拖入下一章跳到下一章末页附近 | 提交后立即重建窗口（前一章只保留末 2 页），像素偏移不变；原生分页回弹随后继续，按旧偏移把新窗口中的 `n:6` 提交为阅读页 | 同上的停稳判定；拖动记录开始时的窗口版本，跨越窗口重建的拖动不提交；重建后同步回到阅读槽 |
+
+SSIV 对应关系：base 为页面在像素预算（4 MP）内的整图解码，超过预算的大图按当前相机的 sample size 解码可见区域 tile（`VisibleImageTiles`）。本轮补上 SSIV 的过渡策略：新相机的 tile 解码完成前保留旧 tile（粗采样在下），不再回落到模糊 base。
+
+回归：`LocalImportTests/testPagedDragsAcrossLongChaptersKeepTheChapterLocalPage`（新夹具 `fixture_reader_paged`，3 章 × 8 页逐页拖动跨章）、`testPagedDoubleTapZoomsAtTheTapAndPansBeforeTurning`、`testContinuousDoubleTapZoomsAtTheTap`（新夹具 `fixture_reader_zoom`，红/绿/蓝三等分，用屏幕像素判断缩放锚点）。修复前第一个用例稳定复现“进入第 2 章第 7 页”。拖到一半被替换的问题由机制修复，XCUITest 无法在按住手指时截图，未单独自动化。

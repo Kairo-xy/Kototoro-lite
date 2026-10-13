@@ -108,6 +108,9 @@ final class SourceReaderModel: ObservableObject {
         didSet { if !isUserPaging && pendingWindow { publishWindow() } }
     }
     var pagedWindowNeedsRestore = false
+    /// The window a user drag of the paged scroll view started on (see `settlePaging`).
+    var pagingWindowRevision: Int?
+    var scrollPhase: ScrollPhase = .idle
 
     var selectedPage: IosSourcePage? { pages.indices.contains(index) ? pages[index] : nil }
     var image: UIImage? { images[windowIndex] }
@@ -841,7 +844,11 @@ struct SourceReaderView: View {
     @State private var cropping = false
     @State private var croppedImage: UIImage?
     @State private var continuousPosition = ScrollPosition(idType: Int.self)
-    @State private var scrollOffset = CGPoint.zero
+    /// The continuous strip's native offset, read by taps, auto-scroll and zoom. Not view state: it changes every
+    /// frame of a scroll, and re-rendering the reader for it made every page resolve its tiles per frame.
+    @State private var scroll = ReaderScrollTracker()
+    /// Where the strip's tiles are resolved for: follows the scroll in steps and when it settles.
+    @State private var tileViewport = CGPoint.zero
     @State private var downloadStatus: String?
     @State private var showingDownloads = false
     @State private var isReaderVisible = false
@@ -866,7 +873,9 @@ struct SourceReaderView: View {
         GeometryReader { geometry in
             ZStack {
                 readingSurface(size: geometry.size)
-                    .onTapGesture(coordinateSpace: .local) { location in tap(at: location, size: geometry.size) }
+                    // Paged slots take their own taps (`ReaderPageZoom`), where a double tap must win over a single.
+                    .gesture(SpatialTapGesture(coordinateSpace: .local).onEnded { tap(at: $0.location, size: geometry.size) },
+                             including: settings.value.mode >= 3 || model.slots.isEmpty ? .all : .subviews)
                 if model.isLoadingPages { ProgressView("正在读取漫画页…").tint(.gray) }
                 if let error = model.error {
                     VStack {
@@ -948,7 +957,7 @@ struct SourceReaderView: View {
                     guard !Task.isCancelled, model.autoScroll else { break }
                     // A window rebuilt during the sleep moves the strip: wait for its restore, not the old offset.
                     guard model.isReadyForAutoScroll else { continue }
-                    let current = settings.value.mode == 3 ? scrollOffset.y : scrollOffset.x
+                    let current = settings.value.mode == 3 ? scroll.offset.y : scroll.offset.x
                     let direction = settings.value.continuousForwardSign
                     let next = current + direction * CGFloat(model.engine.autoScrollDistance(speed: Float(settings.value.autoSpeed), elapsedMillis: 16))
                     let range = model.continuousScrollRange
@@ -1026,7 +1035,7 @@ struct SourceReaderView: View {
             ) { slot in
                 if let spread = model.slots.first(where: { Int($0.index) == slot }) {
                     // Opaque like Android's slot background: the next page waits pinned underneath.
-                    ReaderSpread(model: model, settings: settings, slot: spread, size: size)
+                    ReaderSpread(model: model, settings: settings, slot: spread, size: size) { tap(at: $0, size: size) }
                         .id(model.slotIdentity(spread))
                         .background(settings.background)
                 }
@@ -1070,18 +1079,10 @@ struct SourceReaderView: View {
         .accessibilityValue(model.readingPositionDescription)
         .scrollBounceBehavior(.always, axes: vertical ? .vertical : .horizontal)
         .modifier(ReaderPaging(paged: !continuous))
-        .modifier(ReaderScrollPosition(continuous: continuous, position: $continuousPosition,
-                                      slot: Binding<String?>(get: {
-                                          model.slots.first { Int($0.index) == model.slotIndex }.map(model.slotIdentity)
-                                      },
-                                          set: {
-                                              if model.windowRevision == windowRevision, model.sceneRevision == sceneRevision,
-                                                 settings.value.mode == mode,
-                                                 let value = $0,
-                                                 let slot = model.slots.first(where: { model.slotIdentity($0) == value }) {
-                                                  model.scrolledToSlot(Int(slot.index))
-                                              }
-                                          })))
+        // Paged scroll views are only moved through the proxy and only report the slot they settled on: a position
+        // binding is a second writer that moves the pages under the finger and re-applies stale targets after the
+        // window is rebuilt around a new chapter.
+        .modifier(ReaderScrollPosition(continuous: continuous, position: $continuousPosition))
         // All modes use physical scroll coordinates; RTL reverses slot order rather than the scroll coordinate system.
         .environment(\.layoutDirection, .leftToRight)
         .id("\(mode)-\(model.sceneRevision)")
@@ -1090,6 +1091,7 @@ struct SourceReaderView: View {
             guard model.windowRevision == windowRevision, model.sceneRevision == sceneRevision,
                   settings.value.mode == mode else { return }
             let point = continuous ? viewport.rawOffset : viewport.offset
+            if !continuous { scroll.pagedOffset = point }
             if !continuous, model.pagedWindowNeedsRestore, !model.isUserPaging {
                 let extent = vertical ? size.height : size.width
                 let physical = settings.value.readsRightToLeft ? model.slots.count - 1 - model.slotIndex : model.slotIndex
@@ -1102,27 +1104,28 @@ struct SourceReaderView: View {
                 return
             }
             if continuous {
-                scrollOffset = point; model.continuousPosition(x: point.x, y: point.y, range: viewport.rawRange)
-            }
-            else if model.isUserPaging {
-                reportPagedOffset(vertical ? point.y : point.x, extent: vertical ? size.height : size.width)
+                scroll.offset = point
+                if abs(point.x - tileViewport.x) > size.width / 4 || abs(point.y - tileViewport.y) > size.height / 4 {
+                    tileViewport = point
+                }
+                model.continuousPosition(x: point.x, y: point.y, range: viewport.rawRange)
             }
         }
         .onScrollPhaseChange { previous, phase, context in
             guard model.windowRevision == windowRevision, model.sceneRevision == sceneRevision,
                   settings.value.mode == mode else { return }
-            if !continuous, phase == .idle, model.isUserPaging {
-                let viewport = ReaderScrollViewport(context.geometry, vertical: vertical)
-                reportPagedOffset(vertical ? viewport.offset.y : viewport.offset.x,
-                                  extent: vertical ? size.height : size.width)
-            }
+            model.scrollPhase = phase
             if phase == .interacting {
                 model.pagedWindowNeedsRestore = false
                 model.userScrolled()
+                // A drag belongs to the window it started on; one carried over a rebuild reports nothing.
+                model.pagingWindowRevision = model.windowRevision
             }
             switch phase {
             case .tracking: break
             case .interacting, .decelerating: model.isUserPaging = true
+            case .idle where !continuous:
+                settlePaging(context.geometry, vertical: vertical, size: size, proxy: proxy)
             case .idle, .animating:
                 // The settling report can arrive in the same update as the phase change.
                 Task { @MainActor in
@@ -1133,6 +1136,7 @@ struct SourceReaderView: View {
                 }
             @unknown default: break
             }
+            if phase == .idle && continuous && tileViewport != scroll.offset { tileViewport = scroll.offset }
             if phase == .idle && !model.autoScroll { Task { await model.persist() } }
         }
         .modifier(ReaderStripZoom(enabled: continuous, zoom: model.stripZoom, size: size) { zoom, location in
@@ -1144,18 +1148,20 @@ struct SourceReaderView: View {
         .onChange(of: model.windowRevision) { _, _ in
             if continuous { scrollContinuous(to: model.restoreOrigin) }
             else {
+                // The rebuilt window keeps the old pixel offset, which now shows another page: move to the reading
+                // slot before anything reads the offset (the restore in the geometry action repeats it if needed).
+                if !model.isUserPaging { scrollToReadingSlot(proxy) }
                 Task { @MainActor in
                     await Task.yield()
                     if !model.isUserPaging { scrollToReadingSlot(proxy) }
                 }
             }
         }
-        .onChange(of: model.slotIndex) { _, _ in
+        .onChange(of: model.slotIndex) { previous, current in
             guard !continuous, !model.isUserPaging else { return }
-            Task { @MainActor in
-                await Task.yield()
-                if !model.isUserPaging { scrollToReadingSlot(proxy) }
-            }
+            // Taps, keys and auto-scroll turn one page with the page animation; the slider and restores jump.
+            let animation = abs(current - previous) == 1 ? pageAnimation : nil
+            withAnimation(animation) { scrollToReadingSlot(proxy) }
         }
         // Created at the reading slot through the position binding; as Android's pager applies its initial page once
         // the pages are laid out, it is also moved there once after the first layout, in case the binding was not
@@ -1190,13 +1196,13 @@ struct SourceReaderView: View {
                     index: Int(placement.index),
                     segment: Int(placement.segment),
                     displaySize: CGSize(width: CGFloat(placement.width), height: CGFloat(placement.height)),
-                    viewportOffset: scrollOffset,
+                    viewportOffset: tileViewport,
                     zoomScale: 1
                 )
                     .frame(width: CGFloat(placement.width), height: CGFloat(placement.height))
                     .id(Int(slot.index))
             } else {
-                ReaderSpread(model: model, settings: settings, slot: slot, size: size)
+                ReaderSpread(model: model, settings: settings, slot: slot, size: size) { tap(at: $0, size: size) }
                     .scrollTransition(.interactive, axis: settings.value.mode == 2 ? .vertical : .horizontal) { content, phase in
                         content.opacity(!reduceMotion && settings.value.animation == 2 && !phase.isIdentity ? 0 : 1)
                             .scaleEffect(!reduceMotion && settings.value.animation == 3 && !phase.isIdentity ? 0.85 : 1)
@@ -1347,6 +1353,34 @@ struct SourceReaderView: View {
         proxy.scrollTo(model.slotIdentity(slot), anchor: .topLeading)
     }
 
+    /// A paged scroll came to rest. SwiftUI can report idle while the native paging snap is still finishing, so the
+    /// settled slot is committed (and a deferred window rebuilt) only once the offset has stayed on a page boundary;
+    /// a drag that began before the current window was built never commits.
+    private func settlePaging(_ geometry: ScrollGeometry, vertical: Bool, size: CGSize, proxy: ScrollViewProxy) {
+        let windowRevision = model.windowRevision, sceneRevision = model.sceneRevision
+        let extent = vertical ? size.height : size.width
+        Task { @MainActor in
+            var last = CGFloat.nan
+            for _ in 0..<30 {
+                try? await Task.sleep(for: .milliseconds(16))
+                guard model.scrollPhase == .idle, model.windowRevision == windowRevision,
+                      model.sceneRevision == sceneRevision else { return }
+                let offset = vertical ? scroll.pagedOffset.y : scroll.pagedOffset.x
+                let aligned = extent > 0 && abs(offset / extent - (offset / extent).rounded()) * extent < 1
+                if aligned && offset == last { break }
+                last = offset
+            }
+            guard model.scrollPhase == .idle, model.windowRevision == windowRevision,
+                  model.sceneRevision == sceneRevision else { return }
+            if model.isUserPaging && model.pagingWindowRevision == windowRevision {
+                reportPagedOffset(last.isNaN ? 0 : last, extent: extent)
+            }
+            model.pagingWindowRevision = nil
+            model.isUserPaging = false
+            if model.pagedWindowNeedsRestore || model.windowRevision != windowRevision { scrollToReadingSlot(proxy) }
+        }
+    }
+
     private func reportPagedOffset(_ offset: CGFloat, extent: CGFloat) {
         guard extent > 0, offset.isFinite, !model.slots.isEmpty else { return }
         let physical = min(max(0, Int((offset / extent).rounded())), model.slots.count - 1)
@@ -1393,7 +1427,7 @@ struct SourceReaderView: View {
         model.userScrolled()
         if settings.value.mode >= 3 {
             let vertical = settings.value.mode == 3
-            let current = vertical ? scrollOffset.y : scrollOffset.x
+            let current = vertical ? scroll.offset.y : scroll.offset.x
             let direction = settings.value.continuousForwardSign
             let step = (vertical ? size.height : size.width) * 0.85 * (forward ? 1 : -1) * direction
             // The scroll view's own range: safe-area insets shift its edges from the scene's 0...scrollLimit.
@@ -1421,8 +1455,8 @@ struct SourceReaderView: View {
     }
     private func scrollContinuous(to origin: CGFloat) {
         // Keep the cross-axis pan while moving along the chapter.
-        if settings.value.mode == 3 { continuousPosition.scrollTo(point: CGPoint(x: scrollOffset.x, y: origin)) }
-        else { continuousPosition.scrollTo(point: CGPoint(x: origin, y: scrollOffset.y)) }
+        if settings.value.mode == 3 { continuousPosition.scrollTo(point: CGPoint(x: scroll.offset.x, y: origin)) }
+        else { continuousPosition.scrollTo(point: CGPoint(x: origin, y: scroll.offset.y)) }
     }
 
     /// Lays the strip out at [zoom] and scrolls so the content under [location] (a point in the viewport) stays put.
@@ -1432,13 +1466,14 @@ struct SourceReaderView: View {
         model.setStripZoom(zoom)
         let ratio = model.stripZoom / previous
         guard ratio != 1 else { return }
-        let x = (scrollOffset.x + location.x) * ratio - location.x
-        let y = (scrollOffset.y + location.y) * ratio - location.y
+        let x = (scroll.offset.x + location.x) * ratio - location.x
+        let y = (scroll.offset.y + location.y) * ratio - location.y
         let vertical = settings.value.mode == 3
         let limit = CGFloat(model.engine.scrollLimit())
         let target = CGPoint(x: min(max(0, x), vertical ? size.width * (model.stripZoom - 1) : limit),
                              y: min(max(0, y), vertical ? limit : size.height * (model.stripZoom - 1)))
-        scrollOffset = target
+        scroll.offset = target
+        tileViewport = target
         Task { @MainActor in
             // After the wider layout is in place, or the scroll view clamps to the old content size.
             await Task.yield()
@@ -1476,6 +1511,12 @@ struct SourceReaderView: View {
 }
 
 enum ReaderPanel { case chapters, more }
+
+private final class ReaderScrollTracker {
+    var offset = CGPoint.zero
+    /// The paged scroll view's physical offset, insets included.
+    var pagedOffset = CGPoint.zero
+}
 
 /// Paged geometry uses physical bounds; continuous point scrolling keeps the native offset used by restoration.
 private struct ReaderScrollViewport: Equatable {
@@ -1611,10 +1652,8 @@ private struct ReaderPaging: ViewModifier {
 private struct ReaderScrollPosition: ViewModifier {
     let continuous: Bool
     @Binding var position: ScrollPosition
-    let slot: Binding<String?>
     func body(content: Content) -> some View {
-        if continuous { content.scrollPosition($position) }
-        else { content.scrollPosition(id: slot, anchor: .topLeading) }
+        if continuous { content.scrollPosition($position) } else { content }
     }
 }
 
@@ -1672,11 +1711,20 @@ private struct ReaderPageTile: View {
     }
 }
 
+/// Subsampling tiles over a page's base image, like Android's SSIV: the base is the whole page decoded within the
+/// pixel budget, and the visible region is decoded again at the sample size the current camera needs. Tiles of the
+/// previous camera stay drawn (coarser ones underneath) until the new set is ready, so zooming and panning never fall
+/// back to the blurred base in between.
 private struct ReaderTiledOverlay: View {
     let artifact: ReaderImageArtifact
     let tiles: [IosReaderTile]
     let displaySize: CGSize
-    @State private var decodedTiles: [String: UIImage] = [:]
+    @State private var decodedTiles: [String: DecodedTile] = [:]
+
+    private struct DecodedTile {
+        let tile: IosReaderTile
+        let image: UIImage
+    }
 
     private static func key(_ tile: IosReaderTile) -> String {
         "\(tile.decodeLeft):\(tile.decodeTop):\(tile.decodeWidth):\(tile.decodeHeight):\(tile.sampleSize)"
@@ -1687,39 +1735,48 @@ private struct ReaderTiledOverlay: View {
     }
 
     var body: some View {
+        // Coarse samples first, so the finer tiles of the current camera draw on top.
+        let drawn = decodedTiles.sorted {
+            $0.value.tile.sampleSize != $1.value.tile.sampleSize
+                ? $0.value.tile.sampleSize > $1.value.tile.sampleSize : $0.key < $1.key
+        }
         ZStack(alignment: .topLeading) {
-            ForEach(Array(tiles.enumerated()), id: \.offset) { _, tile in
-                if let image = decodedTiles[Self.key(tile)] {
-                    let layout = SourceImageFile.tileLayout(
-                        logical: CGRect(x: Int(tile.logicalLeft), y: Int(tile.logicalTop),
-                                        width: Int(tile.logicalWidth), height: Int(tile.logicalHeight)),
-                        decoded: CGRect(x: Int(tile.decodeLeft), y: Int(tile.decodeTop),
-                                        width: Int(tile.decodeWidth), height: Int(tile.decodeHeight)),
-                        sourceSize: CGSize(width: artifact.encodedWidth, height: artifact.encodedHeight),
-                        displaySize: displaySize
-                    )
-                    Image(uiImage: image).resizable()
-                        .frame(width: layout.decodedSize.width, height: layout.decodedSize.height)
-                        .offset(layout.decodedOffset)
-                        .frame(width: layout.frame.width, height: layout.frame.height, alignment: .topLeading)
-                        .clipped()
-                        .offset(x: layout.frame.minX, y: layout.frame.minY)
-                }
+            ForEach(drawn, id: \.key) { _, decoded in
+                let tile = decoded.tile
+                let layout = SourceImageFile.tileLayout(
+                    logical: CGRect(x: Int(tile.logicalLeft), y: Int(tile.logicalTop),
+                                    width: Int(tile.logicalWidth), height: Int(tile.logicalHeight)),
+                    decoded: CGRect(x: Int(tile.decodeLeft), y: Int(tile.decodeTop),
+                                    width: Int(tile.decodeWidth), height: Int(tile.decodeHeight)),
+                    sourceSize: CGSize(width: artifact.encodedWidth, height: artifact.encodedHeight),
+                    displaySize: displaySize
+                )
+                Image(uiImage: decoded.image).resizable()
+                    .frame(width: layout.decodedSize.width, height: layout.decodedSize.height)
+                    .offset(layout.decodedOffset)
+                    .frame(width: layout.frame.width, height: layout.frame.height, alignment: .topLeading)
+                    .clipped()
+                    .offset(x: layout.frame.minX, y: layout.frame.minY)
             }
         }
         .allowsHitTesting(false)
         .task(id: tileSignature) {
             let activeKeys = Set(tiles.map(Self.key))
-            decodedTiles = decodedTiles.filter { activeKeys.contains($0.key) }
+            // Bounded: a long pan leaves at most one screen of stale tiles behind.
+            if decodedTiles.count > activeKeys.count * 2 {
+                decodedTiles = decodedTiles.filter { activeKeys.contains($0.key) }
+            }
             for tile in tiles {
-                guard !Task.isCancelled else { break }
+                guard !Task.isCancelled else { return }
                 let key = Self.key(tile)
                 guard decodedTiles[key] == nil else { continue }
                 if let image = try? await artifact.decodeTile(tile) {
-                    guard !Task.isCancelled else { break }
-                    decodedTiles[key] = image
+                    guard !Task.isCancelled else { return }
+                    decodedTiles[key] = DecodedTile(tile: tile, image: image)
                 }
             }
+            guard !Task.isCancelled else { return }
+            decodedTiles = decodedTiles.filter { activeKeys.contains($0.key) }
         }
     }
 }
@@ -1729,57 +1786,267 @@ private struct ReaderInvert: ViewModifier {
     func body(content: Content) -> some View { if enabled { content.colorInvert() } else { content } }
 }
 
+/// One paged slot. Zoom and pan are a native `UIScrollView` ([ReaderPageZoom]), like Android's Telephoto page: pinch
+/// and double-tap zoom about the touch, panning decelerates and bounces natively, and a zoomed page at its edge hands
+/// the drag on to the pager. Tiles follow the settled camera only, so a pan does not resample every frame.
 private struct ReaderSpread: View {
     @ObservedObject var model: SourceReaderModel
     @ObservedObject var settings: ReaderSettings
     let slot: IosReaderSlot
     let size: CGSize
-    @State private var scale = 1.0
-    @State private var baseScale = 1.0
-    @State private var pan = CGSize.zero
-    @State private var basePan = CGSize.zero
+    let onTap: (CGPoint) -> Void
+    @State private var camera = ReaderPageCamera()
+
     var body: some View {
-        ZStack(alignment: .topLeading) {
-            ForEach(Array(slot.placements.enumerated()), id: \.offset) { _, placement in
-                ReaderPageTile(
-                    model: model,
-                    settings: settings,
-                    index: Int(placement.index),
-                    segment: Int(placement.segment),
-                    displaySize: CGSize(width: CGFloat(placement.width), height: CGFloat(placement.height)),
-                    viewportOffset: CGPoint(x: pan.width, y: pan.height),
-                    zoomScale: scale
-                )
-                    .frame(width: CGFloat(placement.width), height: CGFloat(placement.height))
-                    .offset(x: CGFloat(placement.x), y: CGFloat(placement.y))
+        let bounds = contentBounds
+        ReaderPageZoom(
+            size: size, content: bounds, readsRightToLeft: settings.value.readsRightToLeft,
+            maximumScale: CGFloat(IosReader.companion.MAXIMUM_PAGE_ZOOM),
+            doubleTapScale: CGFloat(IosReader.companion.DOUBLE_TAP_ZOOM),
+            onTap: onTap,
+            onZoomed: { model.isPageZoomed = $0 },
+            onCamera: { if camera != $0 { camera = $0 } }
+        ) {
+            ZStack(alignment: .topLeading) {
+                ForEach(Array(slot.placements.enumerated()), id: \.offset) { _, placement in
+                    ReaderPageTile(
+                        model: model,
+                        settings: settings,
+                        index: Int(placement.index),
+                        segment: Int(placement.segment),
+                        displaySize: CGSize(width: CGFloat(placement.width), height: CGFloat(placement.height)),
+                        viewportOffset: camera.offset,
+                        zoomScale: camera.scale
+                    )
+                        .frame(width: CGFloat(placement.width), height: CGFloat(placement.height))
+                        .offset(x: CGFloat(placement.x) - bounds.minX, y: CGFloat(placement.y) - bounds.minY)
+                }
             }
+            .frame(width: bounds.width, height: bounds.height, alignment: .topLeading)
+            .environment(\.layoutDirection, .leftToRight)
         }
-        // Placements already include centering; keep their origin at the top-left of the viewport.
-        .frame(width: size.width, height: size.height, alignment: .topLeading)
-        .scaleEffect(scale).offset(pan)
-        .frame(width: size.width, height: size.height).clipped()
-        .environment(\.layoutDirection, .leftToRight)
-        .simultaneousGesture(MagnifyGesture().onChanged { scale = min(6, max(1, baseScale * $0.magnification)) }
-            .onEnded { _ in baseScale = scale; clamp() })
-        .highPriorityGesture(DragGesture().onChanged {
-            if canPan { pan = CGSize(width: basePan.width + $0.translation.width, height: basePan.height + $0.translation.height) }
-        }.onEnded { _ in if canPan { clamp() } }, including: canPan ? .all : .subviews)
-        .onTapGesture(count: 2) { withAnimation { scale = scale > 1 ? 1 : 2; baseScale = scale; clamp() } }
-        .onChange(of: scale > 1) { _, zoomed in model.isPageZoomed = zoomed }
+        .frame(width: size.width, height: size.height)
     }
-    private var canPan: Bool {
-        scale > 1 || (slot.placements.map { $0.x + $0.width }.max() ?? 0) > Float(size.width) ||
-            (slot.placements.map { $0.y + $0.height }.max() ?? 0) > Float(size.height)
+
+    /// The pages' union inside the viewport (placements already include the fit's centering); an empty slot, still
+    /// waiting for its pages, covers the viewport so it still takes taps.
+    private var contentBounds: CGRect {
+        guard !slot.placements.isEmpty else { return CGRect(origin: .zero, size: size) }
+        let left = slot.placements.map { CGFloat($0.x) }.min() ?? 0
+        let top = slot.placements.map { CGFloat($0.y) }.min() ?? 0
+        let right = slot.placements.map { CGFloat($0.x + $0.width) }.max() ?? size.width
+        let bottom = slot.placements.map { CGFloat($0.y + $0.height) }.max() ?? size.height
+        return CGRect(x: left, y: top, width: max(1, right - left), height: max(1, bottom - top))
     }
-    private func clamp() {
-        let left = slot.placements.map { $0.x }.min() ?? 0
-        let right = slot.placements.map { $0.x + $0.width }.max() ?? Float(size.width)
-        let top = slot.placements.map { $0.y }.min() ?? 0
-        let bottom = slot.placements.map { $0.y + $0.height }.max() ?? Float(size.height)
-        pan = CGSize(width: CGFloat(model.engine.clampPan(value: Float(pan.width), contentMin: left, contentMax: right,
-                                                           viewport: Float(size.width), scale: Float(scale))),
-                     height: CGFloat(model.engine.clampPan(value: Float(pan.height), contentMin: top, contentMax: bottom,
-                                                            viewport: Float(size.height), scale: Float(scale))))
-        basePan = pan
+}
+
+/// The settled camera of a paged slot in reader-core's terms (`PagedCameraTransform`): scale and the centre-anchored
+/// offset `PagedSlot.contentViewport` resolves the visible region from.
+struct ReaderPageCamera: Equatable {
+    var scale: CGFloat = 1
+    var offset: CGPoint = .zero
+}
+
+/// A zooming `UIScrollView` around one slot's SwiftUI pages. Unzoomed content that fits does not scroll at all, so the
+/// enclosing pager (scroll view or turn pager) owns every drag; zoomed or overflowing content pans natively and, once
+/// at its edge, leaves the drag to the pager as nested UIKit scroll views do.
+private struct ReaderPageZoom<Content: View>: UIViewRepresentable {
+    let size: CGSize
+    let content: CGRect
+    let readsRightToLeft: Bool
+    let maximumScale: CGFloat
+    let doubleTapScale: CGFloat
+    let onTap: (CGPoint) -> Void
+    let onZoomed: (Bool) -> Void
+    let onCamera: (ReaderPageCamera) -> Void
+    @ViewBuilder let page: () -> Content
+
+    func makeCoordinator() -> Coordinator { Coordinator(host: UIHostingController(rootView: page())) }
+
+    func makeUIView(context: Context) -> ReaderZoomScrollView {
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        let view = ReaderZoomScrollView()
+        view.host = coordinator.host
+        view.delegate = coordinator
+        view.minimumZoomScale = 1
+        view.maximumZoomScale = maximumScale
+        view.bouncesZoom = true
+        view.showsVerticalScrollIndicator = false
+        view.showsHorizontalScrollIndicator = false
+        view.contentInsetAdjustmentBehavior = .never
+        view.isDirectionalLockEnabled = true
+        view.scrollsToTop = false
+        view.backgroundColor = .clear
+        view.clipsToBounds = true
+        let host = coordinator.host
+        host.view.backgroundColor = .clear
+        host.safeAreaRegions = []
+        host.sizingOptions = []
+        view.addSubview(host.view)
+        let double = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.doubleTap(_:)))
+        double.numberOfTapsRequired = 2
+        let single = UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.singleTap(_:)))
+        single.require(toFail: double)
+        view.addGestureRecognizer(double)
+        view.addGestureRecognizer(single)
+        coordinator.scroll = view
+        return view
+    }
+
+    func updateUIView(_ view: ReaderZoomScrollView, context: Context) {
+        let coordinator = context.coordinator
+        coordinator.parent = self
+        view.maximumZoomScale = maximumScale
+        coordinator.host.rootView = page()
+        coordinator.layout()
+    }
+
+    static func dismantleUIView(_ view: ReaderZoomScrollView, coordinator: Coordinator) {
+        if coordinator.zoomed { coordinator.parent?.onZoomed(false) }
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, UIScrollViewDelegate {
+        var parent: ReaderPageZoom?
+        let host: UIHostingController<Content>
+        weak var scroll: ReaderZoomScrollView?
+        private var laidOut: (size: CGSize, content: CGRect)?
+        private(set) var zoomed = false
+        private var reportedOffset = CGPoint.zero
+
+        init(host: UIHostingController<Content>) { self.host = host }
+
+        /// Lays the pages out unzoomed whenever the viewport or the pages' fitted bounds change (a page's real size
+        /// arriving moves them); overflow starts at the reading edge, as `PagedCameraTransform.initial`.
+        func layout() {
+            guard let scroll, let parent, parent.size.width > 1, parent.size.height > 1 else { return }
+            if let laidOut, laidOut.size == parent.size, laidOut.content == parent.content { return }
+            laidOut = (parent.size, parent.content)
+            scroll.setZoomScale(1, animated: false)
+            host.view.transform = .identity
+            host.view.frame = CGRect(origin: .zero, size: parent.content.size)
+            scroll.contentSize = parent.content.size
+            updateInsets()
+            let insets = scroll.contentInset
+            let overflowX = parent.content.width - parent.size.width
+            scroll.contentOffset = CGPoint(x: parent.readsRightToLeft && overflowX > 0 ? overflowX : -insets.left,
+                                           y: -insets.top)
+            setZoomed(false)
+            report()
+        }
+
+        /// Content smaller than the viewport keeps its fitted place (centred, or wherever the fit put it) and moves
+        /// towards the centre of what it leaves free as it grows, so panning never shows past the pages.
+        private func updateInsets() {
+            guard let scroll, let parent else { return }
+            let scale = scroll.zoomScale
+            func leading(_ origin: CGFloat, _ extent: CGFloat, _ viewport: CGFloat) -> CGFloat {
+                let scaled = extent * scale
+                guard scaled < viewport else { return 0 }
+                let free = viewport - extent
+                let ratio = free > 0.5 ? min(max(origin / free, 0), 1) : 0.5
+                return (viewport - scaled) * ratio
+            }
+            let content = parent.content, size = parent.size
+            let left = leading(content.minX, content.width, size.width)
+            let top = leading(content.minY, content.height, size.height)
+            scroll.contentInset = UIEdgeInsets(
+                top: top, left: left,
+                bottom: max(0, size.height - content.height * scale - top),
+                right: max(0, size.width - content.width * scale - left)
+            )
+            // Content that fits does not scroll, so the pager behind gets the drag from its first touch.
+            scroll.isScrollEnabled = scale > 1.001 || content.width > size.width + 0.5 || content.height > size.height + 0.5
+        }
+
+        func viewForZooming(in scrollView: UIScrollView) -> UIView? { host.view }
+
+        func scrollViewDidZoom(_ scrollView: UIScrollView) {
+            updateInsets()
+            setZoomed(scrollView.zoomScale > 1.01)
+        }
+
+        func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) { report() }
+
+        func scrollViewDidScroll(_ scrollView: UIScrollView) {
+            // Long pans refresh the tiles on the way; short moves wait for the pan to settle.
+            guard !scrollView.isZooming, let parent else { return }
+            let moved = hypot(scrollView.contentOffset.x - reportedOffset.x, scrollView.contentOffset.y - reportedOffset.y)
+            if moved > min(parent.size.width, parent.size.height) / 3 { report() }
+        }
+
+        func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
+            if !decelerate { report() }
+        }
+
+        func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) { report() }
+        func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) { report() }
+
+        private func setZoomed(_ value: Bool) {
+            guard zoomed != value else { return }
+            zoomed = value
+            parent?.onZoomed(value)
+        }
+
+        /// The visible part of the slot as reader-core's camera: `contentViewport(scale, offset)` gives it back.
+        private func report() {
+            guard let scroll, let parent else { return }
+            reportedOffset = scroll.contentOffset
+            let scale = scroll.zoomScale
+            let visible = CGPoint(x: parent.content.minX + scroll.contentOffset.x / scale,
+                                  y: parent.content.minY + scroll.contentOffset.y / scale)
+            let center = CGPoint(x: parent.size.width / 2, y: parent.size.height / 2)
+            parent.onCamera(ReaderPageCamera(
+                scale: scale,
+                offset: CGPoint(x: -center.x - (visible.x - center.x) * scale, y: -center.y - (visible.y - center.y) * scale)
+            ))
+        }
+
+        @objc func singleTap(_ gesture: UITapGestureRecognizer) {
+            guard let scroll else { return }
+            let point = gesture.location(in: scroll)
+            parent?.onTap(CGPoint(x: point.x - scroll.contentOffset.x, y: point.y - scroll.contentOffset.y))
+        }
+
+        /// Android's double tap: back to fit when zoomed, otherwise zoom in keeping the tapped point under the finger.
+        @objc func doubleTap(_ gesture: UITapGestureRecognizer) {
+            guard let scroll, let parent else { return }
+            if scroll.zoomScale > 1.01 { scroll.setZoomScale(1, animated: true); return }
+            let scale = min(parent.doubleTapScale, scroll.maximumZoomScale)
+            let anchor = gesture.location(in: host.view)
+            let touch = gesture.location(in: scroll)
+            let screen = CGPoint(x: touch.x - scroll.contentOffset.x, y: touch.y - scroll.contentOffset.y)
+            UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut, .allowUserInteraction]) {
+                scroll.zoomScale = scale
+                let insets = scroll.contentInset
+                let maxX = parent.content.width * scale - parent.size.width + insets.right
+                let maxY = parent.content.height * scale - parent.size.height + insets.bottom
+                scroll.contentOffset = CGPoint(
+                    x: min(max(anchor.x * scale - screen.x, -insets.left), max(-insets.left, maxX)),
+                    y: min(max(anchor.y * scale - screen.y, -insets.top), max(-insets.top, maxY))
+                )
+            } completion: { _ in self.report() }
+        }
+    }
+}
+
+/// Keeps the hosted pages a child of the reader's view controller, so their sheets (a challenge's browser) present.
+final class ReaderZoomScrollView: UIScrollView {
+    weak var host: UIViewController?
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard let host else { return }
+        if window == nil {
+            if host.parent != nil { host.willMove(toParent: nil); host.removeFromParent() }
+            return
+        }
+        guard host.parent == nil else { return }
+        var responder: UIResponder? = next
+        while let current = responder, !(current is UIViewController) { responder = current.next }
+        guard let controller = responder as? UIViewController else { return }
+        controller.addChild(host)
+        host.didMove(toParent: controller)
     }
 }
