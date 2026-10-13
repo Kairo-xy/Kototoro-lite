@@ -98,6 +98,9 @@ final class SourceReaderModel: ObservableObject {
     /// The continuous scroll origin of the position being read now.
     var currentOrigin: CGFloat { CGFloat(engine.scrollOrigin(index: Int32(windowIndex), offset: offset)) }
     private var awaitingRestore = false
+    /// The continuous viewport's first visible page and its offset: window rebuilds keep the strip where the reader
+    /// left it, which can differ from the reading page at the strip's end.
+    private var viewAnchor: (page: IosReaderPage, offset: Float)?
     /// The paged scroll view is moving under the reader's finger (dragged or settling from a drag). Like Android's
     /// pager reports (target page while scrolling, settled page after) and Aidoku's finished page-turn gestures, only
     /// these moves report a page: its own first layout and moves the model made (taps, the slider, restores) do not.
@@ -148,6 +151,9 @@ final class SourceReaderModel: ObservableObject {
     }
 
     private var startAtEnd = false
+    /// An explicit chapter switch opens its start or end, as Android's `switchChapterBy`; history only resumes the
+    /// chapter the reader was opened with.
+    private var ignoresSavedPosition = false
     private var failedChapter: (chapter: IosSourceChapter, atEnd: Bool)?
 
     func load() async {
@@ -181,11 +187,11 @@ final class SourceReaderModel: ObservableObject {
             savedPosition = saved
             if startAtEnd {
                 index = max(0, pages.count - 1); offset = 0
-            } else if let savedPosition, savedPosition.chapterId == selected.id {
+            } else if !ignoresSavedPosition, let savedPosition, savedPosition.chapterId == selected.id {
                 index = min(max(0, Int(savedPosition.index)), max(0, pages.count - 1))
                 offset = savedPosition.scroll
             }
-            startAtEnd = false
+            startAtEnd = false; ignoresSavedPosition = false
             publishWindow()
             configure(size: viewport, preferences: preferences)
             restoreOrigin = currentOrigin
@@ -313,21 +319,26 @@ final class SourceReaderModel: ObservableObject {
 
     private func pageIdentity(_ key: IosReaderPage) -> String { "\(key.chapterId):\(key.index)" }
 
-    /// Android's ChapterPages and this host consume the same reading-order window policy.
-    /// Metadata is bounded to three chapters; decoded images remain bounded to the visible neighborhood.
+    /// Android's ChapterPages and this host consume the same reading-order window policy: paged modes show the
+    /// neighbors' two boundary pages, continuous strips their complete chapters (Android's webtoon shows every loaded
+    /// chapter). Metadata is bounded to three chapters; decoded images remain bounded to the visible neighborhood.
     private func publishWindow() {
-        if loaded && (isUserPaging || isLoadingPages || isPageZoomed) { pendingWindow = true; return }
-        pendingWindow = false
         func keys(_ chapter: IosSourceChapter?) -> [IosReaderPage] {
             guard let chapter, let pages = chapterPages[chapter.id] else { return [] }
             return pages.indices.map { IosReaderPage(chapterId: chapter.id, index: Int32($0)) }
         }
         let updated = engine.chapterWindow(previous: keys(previousChapter), current: keys(chapter),
-                                           next: keys(nextChapter), adjacentPageCount: preferences.mode < 3 ? 2 : 0)
+                                           next: keys(nextChapter),
+                                           adjacentPageCount: preferences.mode < 3 ? 2 : Int32.max)
+        if loaded && !isLoadingPages && appendsInPlace(updated) { appendWindow(updated); return }
+        if loaded && (isUserPaging || isLoadingPages || isPageZoomed) { pendingWindow = true; return }
+        pendingWindow = false
         guard updated != window else { return }
         let old = Dictionary(uniqueKeysWithValues: window.enumerated().map { (pageIdentity($0.element), $0.offset) })
         let oldImages = images, oldArtifacts = artifacts, oldFailures = pageFailures, oldFetches = fetches
         let segment = slots.first { Int($0.index) == slotIndex }?.placements.first { Int($0.index) == windowIndex }?.segment
+        // Where the strip is shown now, unless a restore to another position is still on its way.
+        let anchor = awaitingRestore ? nil : viewAnchor
         cancelNeighborLoads()
         for fetch in fetches.values where !fetch.finished { fetch.task.cancel() }
         if loaded { request = UUID() }
@@ -348,14 +359,42 @@ final class SourceReaderModel: ObservableObject {
         slotIndex = Int(slots.first { $0.placements.contains {
             Int($0.index) == windowIndex && (segment == nil || $0.segment == segment)
         }}?.index ?? 0)
-        if preferences.mode >= 3 { requestScroll(to: currentOrigin) }
+        if preferences.mode >= 3 {
+            let anchored = anchor.flatMap { anchor in
+                updated.firstIndex(of: anchor.page).map { CGFloat(engine.scrollOrigin(index: Int32($0), offset: anchor.offset)) }
+            }
+            requestScroll(to: anchored ?? currentOrigin)
+        }
         windowRevision += 1; pageRevision += 1
+        retainAdjacentChapters()
+        if loaded { loadNeighbors() }
+    }
+
+    /// The window only grows after its end and the strip grows forward from a fixed physical start (top-to-bottom or
+    /// left-to-right), so every page already shown keeps its scroll coordinates.
+    private func appendsInPlace(_ updated: [IosReaderPage]) -> Bool {
+        preferences.mode >= 3 && !preferences.readsRightToLeft && !window.isEmpty && updated.count > window.count
+            && Array(updated.prefix(window.count)) == window
+    }
+
+    /// The next chapter joins the end of a continuous strip without moving it, even while the reader is scrolling:
+    /// indices, decoded pages and downloads under way all stay valid, so nothing is cancelled or scrolled again.
+    private func appendWindow(_ updated: [IosReaderPage]) {
+        pendingWindow = false
+        window = updated
+        windowPages = updated.compactMap { chapterPages[$0.chapterId]?[Int($0.index)] }
+        engine.setPages(pages: updated)
+        slots = engine.slots()
+        retainAdjacentChapters()
+        loadNeighbors()
+    }
+
+    private func retainAdjacentChapters() {
         let retained = Set([chapter.id, previousChapter?.id, nextChapter?.id].compactMap { $0 })
         chapterPages = chapterPages.filter { retained.contains($0.key) }
         for (id, preload) in chapterPreloads where !retained.contains(id) {
             preload.cancel(); chapterPreloads[id] = nil
         }
-        if loaded { loadNeighbors() }
     }
 
     private func preloadAdjacentChapters() {
@@ -538,21 +577,51 @@ final class SourceReaderModel: ObservableObject {
         Task { await persist() }
     }
 
-    func continuousPosition(x: CGFloat, y: CGFloat) {
+    /// The continuous scroll view's reachable offsets along the reading axis, once it has reported them.
+    private(set) var scrollRange: ClosedRange<CGFloat>?
+    var continuousScrollRange: ClosedRange<CGFloat> { scrollRange ?? 0...CGFloat(engine.scrollLimit()) }
+
+    func continuousPosition(x: CGFloat, y: CGFloat, range: ClosedRange<CGFloat>) {
         guard loaded, !windowPages.isEmpty else { return }
+        scrollRange = range
         let limit = CGFloat(engine.scrollLimit())
-        let primary = min(max(0, preferences.mode == 3 ? y : x), limit)
+        let raw = preferences.mode == 3 ? y : x
+        let primary = min(max(0, raw), limit)
         viewportOffset = CGPoint(x: preferences.mode == 3 ? x : primary,
                                  y: preferences.mode == 3 ? primary : y)
         if awaitingRestore {
-            let current = primary
-            guard images[windowIndex] != nil, abs(current - restoreOrigin) < 2 else { return }
+            let current = raw
+            // A target past what the scroll view can reach rests at its edge.
+            let target = min(max(restoreOrigin, range.lowerBound), range.upperBound)
+            guard images[windowIndex] != nil, abs(current - target) < 2 else { return }
             awaitingRestore = false
         }
         let progress = engine.progress(x: Float(viewportOffset.x), y: Float(viewportOffset.y))
-        let nextIndex = min(max(0, Int(progress.index)), max(0, windowPages.count - 1))
+        let first = min(max(0, Int(progress.index)), max(0, windowPages.count - 1))
+        let last = Int(engine.lastVisible(x: Float(viewportOffset.x), y: Float(viewportOffset.y)))
+        // Motion is compared by page identity, so the coordinate shift of a rebuilt window is not a move.
+        let movedBack: Bool = {
+            guard let previous = viewAnchor, let before = window.firstIndex(of: previous.page) else { return false }
+            return first < before || first == before && progress.offset < previous.offset - 0.5
+        }()
+        if window.indices.contains(first) { viewAnchor = (window[first], progress.offset) }
+        // The first visible page is the reading page, but pages shorter than the screen at the strip's end never
+        // become first: scrolling to the end reads its last visible page, so a short next chapter is entered (and the
+        // one after it loaded) and the book's last pages are recorded. A reading page ahead of the first visible one
+        // (from that end, or a restore the strip end clamped) stays while it is shown, until the reader goes back;
+        // a strip that fits on screen cannot scroll, so there it only keeps the page it was given.
+        let forward = preferences.continuousForwardSign
+        let scrollable = range.upperBound - range.lowerBound > 1
+        let atEnd = scrollable && (forward > 0 ? raw >= range.upperBound - 1 : raw <= range.lowerBound + 1)
+        var nextIndex = first
+        if atEnd && (isUserPaging || autoScroll) && windowPages.indices.contains(last) && last > first {
+            nextIndex = last
+        } else if last >= first && windowIndex > first && windowIndex <= last && (!movedBack || atEnd || !scrollable) {
+            nextIndex = windowIndex
+        }
+        let nextOffset = nextIndex == first ? progress.offset : 0
         if windowIndex != nextIndex { selectWindowPage(nextIndex) }
-        offset = progress.offset
+        offset = nextOffset
         let nextSlot = Int(slots.first { $0.anchor == Int32(windowIndex) }?.index ?? 0)
         if slotIndex != nextSlot { slotIndex = nextSlot }
     }
@@ -649,7 +718,7 @@ final class SourceReaderModel: ObservableObject {
             }
             return
         }
-        startAtEnd = atEnd
+        startAtEnd = atEnd; ignoresSavedPosition = true
         request = UUID(); chapter = target; loaded = false; sceneRevision += 1
         pendingWindow = false
         isUserPaging = false; isPageZoomed = false
@@ -660,7 +729,7 @@ final class SourceReaderModel: ObservableObject {
         preloadedPages = Task { prepared }
         pages = []; window = []; windowPages = []; slots = []; images = [:]; artifacts = [:]; loading = []; pageFailures = [:]
         chapterPages = [target.id: prepared]
-        index = 0; windowIndex = 0; slotIndex = 0; offset = 0; viewportOffset = .zero; engine.reset()
+        index = 0; windowIndex = 0; slotIndex = 0; offset = 0; viewportOffset = .zero; viewAnchor = nil; engine.reset()
         await load()
     }
 
@@ -681,6 +750,12 @@ final class SourceReaderModel: ObservableObject {
     var isReadyForAutoScroll: Bool {
         loaded && !isLoadingPages && (preferences.mode < 3 || !awaitingRestore) && slots.indices.contains(slotIndex) &&
             slots[slotIndex].placements.allSatisfy { images[Int($0.index)] != nil }
+    }
+
+    /// The next chapter's page list is on its way into the continuous strip (see [preloadAdjacentChapters]).
+    var isLoadingNextChapter: Bool {
+        guard preferences.mode >= 3, let next = nextChapter else { return false }
+        return chapterPreloads[next.id] != nil && chapterPages[next.id] == nil
     }
 
     func advanceChapterAutomatically() async -> Bool {
@@ -858,6 +933,7 @@ struct SourceReaderView: View {
         }
         .task(id: model.autoScroll) {
             var elapsed = 0
+            var landedOnEdge = false
             while model.autoScroll && !Task.isCancelled {
                 if scenePhase != .active || model.error != nil || model.hasVisiblePageFailure ||
                     (model.loaded && model.pages.isEmpty) {
@@ -870,13 +946,24 @@ struct SourceReaderView: View {
                 if settings.value.mode >= 3 {
                     try? await Task.sleep(for: .milliseconds(16))
                     guard !Task.isCancelled, model.autoScroll else { break }
+                    // A window rebuilt during the sleep moves the strip: wait for its restore, not the old offset.
+                    guard model.isReadyForAutoScroll else { continue }
                     let current = settings.value.mode == 3 ? scrollOffset.y : scrollOffset.x
                     let direction = settings.value.continuousForwardSign
                     let next = current + direction * CGFloat(model.engine.autoScrollDistance(speed: Float(settings.value.autoSpeed), elapsedMillis: 16))
-                    if next < 0 || next > CGFloat(model.engine.scrollLimit()) {
+                    let range = model.continuousScrollRange
+                    if !range.contains(next) {
+                        // Land on the edge first: the strip's end reads its last visible page (and its chapter).
+                        let edge = direction > 0 ? range.upperBound : range.lowerBound
+                        if abs(current - edge) > 0.5 && !landedOnEdge {
+                            landedOnEdge = true; scrollContinuous(to: edge); continue
+                        }
+                        // The next chapter joins the strip once its pages arrive; the scroll then simply continues.
+                        if model.isLoadingNextChapter { continue }
                         if await model.advanceChapterAutomatically() { elapsed = 0; continue }
                         model.autoScroll = false; await model.persist(); break
                     }
+                    landedOnEdge = false
                     scrollContinuous(to: next)
                     elapsed += 16
                     if elapsed >= 5000 { elapsed = 0; await model.persist() }
@@ -1014,7 +1101,9 @@ struct SourceReaderView: View {
                 }
                 return
             }
-            if continuous { scrollOffset = point; model.continuousPosition(x: point.x, y: point.y) }
+            if continuous {
+                scrollOffset = point; model.continuousPosition(x: point.x, y: point.y, range: viewport.rawRange)
+            }
             else if model.isUserPaging {
                 reportPagedOffset(vertical ? point.y : point.x, extent: vertical ? size.height : size.width)
             }
@@ -1307,15 +1396,20 @@ struct SourceReaderView: View {
             let current = vertical ? scrollOffset.y : scrollOffset.x
             let direction = settings.value.continuousForwardSign
             let step = (vertical ? size.height : size.width) * 0.85 * (forward ? 1 : -1) * direction
-            let limit = CGFloat(model.engine.scrollLimit())
-            let fromStart = direction > 0 ? current : limit - current
-            if forward && fromStart >= limit - 1, let next = model.nextChapter {
-                Task { await model.moveChapter(next) }; return
+            // The scroll view's own range: safe-area insets shift its edges from the scene's 0...scrollLimit.
+            // Restores rest a top-to-bottom or left-to-right strip's start at 0, inside the inset it can also show.
+            let range = model.continuousScrollRange
+            let lower = direction > 0 ? max(range.lowerBound, min(0, range.upperBound)) : range.lowerBound
+            let upper = range.upperBound
+            if forward && (direction > 0 ? current >= upper - 1 : current <= lower + 1), let next = model.nextChapter {
+                if !model.isLoadingNextChapter { Task { await model.moveChapter(next) } }
+                return
             }
-            if !forward && fromStart <= 1, let previous = model.previousChapter {
+            if !forward && (direction > 0 ? current <= lower + 1 : current >= upper - 1),
+               let previous = model.previousChapter {
                 Task { await model.moveChapter(previous, atEnd: true) }; return
             }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { scrollContinuous(to: min(max(0, current + step), limit)) }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) { scrollContinuous(to: min(max(lower, current + step), upper)) }
             return
         }
         let target = model.slotIndex + (forward ? 1 : -1)
@@ -1388,6 +1482,8 @@ private struct ReaderScrollViewport: Equatable {
     let rawOffset: CGPoint
     let offset: CGPoint
     let limit: CGFloat
+    /// The native offsets the reading axis can rest at; safe-area insets shift them from the scene's own range.
+    let rawRange: ClosedRange<CGFloat>
 
     init(_ geometry: ScrollGeometry, vertical: Bool) {
         let insets = geometry.contentInsets
@@ -1397,6 +1493,11 @@ private struct ReaderScrollViewport: Equatable {
             : geometry.contentSize.width + insets.leading + insets.trailing
         let viewport = vertical ? geometry.containerSize.height : geometry.containerSize.width
         limit = max(0, content - viewport)
+        // Native offsets start at minus the leading inset and span the content beyond the inset-free container.
+        let start = vertical ? -insets.top : -insets.leading
+        let span = vertical ? geometry.contentSize.height - geometry.containerSize.height
+            : geometry.contentSize.width - geometry.containerSize.width
+        rawRange = start...(start + max(0, span))
     }
 }
 

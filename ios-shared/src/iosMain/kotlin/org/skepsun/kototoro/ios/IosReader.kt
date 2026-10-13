@@ -225,6 +225,13 @@ class IosReader {
         return IosReaderProgress(pageIndex, (frame?.progress?.intraPageOffsetPx ?: 0f) / continuousZoom)
     }
 
+    /** The last page in reading order that the viewport at ([x], [y]) shows, or -1 when it shows none. */
+    fun lastVisible(x: Float, y: Float): Int {
+        val frame = scene?.resolve(ReaderViewport(FloatRect.fromLtwh(x, y, width.toFloat(), height.toFloat())))
+        val rawId = frame?.progress?.lastVisiblePageId?.value ?: return -1
+        return specLookup[rawId]?.first ?: rawId.toInt()
+    }
+
     fun decodeSize(width: Int, height: Int): IosReaderSize {
         val resolved = ImageDecodeSize.resolve(IntSize(width, height), MAXIMUM_PIXELS, MAXIMUM_DIMENSION)
         return IosReaderSize(resolved.width, resolved.height)

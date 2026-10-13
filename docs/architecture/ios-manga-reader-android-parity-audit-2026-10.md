@@ -77,7 +77,7 @@ iOS 原实现已共享 `SourceChapterNavigation` 的邻章选择和 `reader-core
 | 窗口稳定性 | 移动中延后发布窗口；更新后保留语义锚点及拆页 segment。原生分页与 `ForEach` 都使用章节／章内页码／拆页片段组成的稳定 ID，并在布局就绪后确认定位；高级／仿真 pager 在窗口 revision 更新时取消旧动画完成回调。触摸跟踪阶段不取消恢复，真实拖动才取消 |
 | 有界预读与复用 | 最多保留本章和相邻两章的元数据；图片仍按可见邻域淘汰。Kotlin 按稳定页面身份迁移尺寸，Swift 迁移已解码图、artifact、页级错误及已完成 fetch；保留邻章首尾预热和离线章节跳过网络预读 |
 | 导航与发布 | 窗口内书签直接选中已缓存页面；高频滚动几何回调只在活动页变化时发布和保存。显式上一章按钮沿用 Android `switchChapterBy(-1, openLastPage=false)` 的章首语义，向后翻页跨章才进入上一章末页 |
-| 连续模式范围 | 本批连续 scene 仍只包含本章，保留自动切章、点击切章和目录／按钮切章。邻章短页与视口终点的自然接续尚未解决；不把分页验证扩大为五种模式全部对齐 |
+| 连续模式范围 | （第五批已接入，见下节）本批连续 scene 仍只包含本章，保留自动切章、点击切章和目录／按钮切章。邻章短页与视口终点的自然接续尚未解决；不把分页验证扩大为五种模式全部对齐 |
 
 没有新增依赖、提交或分支。当前通过的验证为共享窗口 JVM 测试 2 项、`IosProductTest` Native 测试 19 项、共享元数据编译及 Android `compileDebugKotlin`。Native 首次运行构建 daemon 异常退出，降低本次构建的内存上限和并发后重跑通过，未修改全局 Gradle 设置。
 
@@ -88,6 +88,24 @@ UI 首轮未更新活动章节，补充原生分页几何确认后，章名、�
 最终按唯一用例计：**JVM 窗口测试 2 项、Native `IosProductTest` 19 项、Swift/UI 8 项均通过**，未把重复运行计入数量。UI 覆盖左右／纵向分页、RTL 原生／高级／仿真动画、跨章书签、按顺序终止并重新启动后的续读、三章窗口裁剪、显式上一章到章首，以及横向连续自动跨章。最后的方向回归 5 项全部通过；三章、上一章按钮和连续自动阅读分别有独立通过记录。原生分页确认包括实际夹具像素，不能只凭章名与图片元素存在下结论。没有实现连续条漫的邻章自然页面接续。
 
 日志及结果：`/tmp/kototoro-reader-window-shared.log`、`/tmp/kototoro-reader-window-native-retry.log`、`/tmp/kototoro-reader-window-android.log`、`/tmp/kototoro-reader-window-directions.xcresult`（5 项最终方向／书签／续读回归）、`/tmp/kototoro-reader-window-trim-position.xcresult`（三章窗口）、`/tmp/kototoro-reader-window-catalog.xcresult`（上一章按钮通过）、`/tmp/kototoro-reader-window-final.xcresult`（横向连续自动阅读通过）。后两份报告也包含先前失败的用例，引用其通过项不等于整份报告全通过。Native 和 JVM XML 副本位于 `/tmp/kototoro-reader-window-native-tests.xml`、`/tmp/kototoro-reader-window-jvm-tests.xml`。以上仍是模拟器和编译验证，没有真机 FPS 或峰值内存结论。
+
+## 实施进度：第五批连续条漫自然跨章
+
+| 处理 | 实现与边界 |
+| --- | --- |
+| 窗口内容 | 连续模式经同一 `ReaderChapterWindow.pages` 拼接**完整**前章、本章与后章（Android 条漫显示全部已加载章节；iOS 仍按三章限定元数据）。分页模式保持前后各 2 页 |
+| 原位追加 | 窗口只在末尾增长且条带物理起点不变（纵向、左到右横向）时，滚动中也直接追加下一章：索引、已解码图与进行中的下载都保留，不取消也不重新定位。前插、裁剪或右到左横向仍延后到滚动停止 |
+| 重建定位 | 延后重建以视口首个可见页的页面身份和页内偏移为锚点恢复，而不是阅读页，避免条带因阅读页与视口首页不同而跳动 |
+| 末端短页 | 首个可见页仍是阅读页；但比屏幕短的邻章页永远成不了首个可见页。用户或自动滚动到达条带末端时改读最后可见页，从而进入短邻章、加载再下一章，并记录全书末页。阅读页领先首个可见页时，只有真正向后滚动（按页面身份比较，不受重建坐标位移影响）才回退；放得下整个窗口的条带只保留给定页 |
+| 滚动范围 | 安全区 inset 使原生 offset 范围（`-inset...content-container-inset`）与 scene 的 `0...scrollLimit` 不同。末端判定、点击翻页到边界、自动滚动落边，以及被末端夹住的恢复目标都改用滚动视图自身范围；此前纵向条漫在有 inset 的设备上点击到章末不会切章 |
+| 自动滚动 | 先落到边缘再判定章末；下一章页列表正在预载时等待其接入而非重建场景；窗口重建后等恢复完成再继续，不使用旧 offset |
+| 显式切章 | 上一章/下一章按钮、目录、边界点击与自动切章按 Android `switchChapterBy` 打开章首或章末，不再套用作品历史中同章的位置（此前历史恰为该章时会恢复到历史页）；书签随后仍按自身偏移跳转 |
+
+验证：`IosProductTest` Native **20 项通过**（新增连续窗口追加不移动条带、右到左追加会移动、短尾页为最后可见页）。UI 新增 `testContinuousStripScrollsIntoNeighborChapters`（三章普通滚动 01→02→03 并回到 02 第 3 页，窗口 6/9 页，像素核对）与 `testContinuousStripEndEntersAShortNextChapter`（长页后的短 02 在末端成为阅读章、末章禁用下一章），均通过。完整 `LocalImportTests` + `ReaderSettingsTests` 一轮 25 项中 23 项通过；`testPreviousChapterButtonOpensTheChapterStart` 随后单独重跑通过。
+
+测试辅助修正：上一批在位置描述末尾加了“，窗口 N 页”，`readingOffset` 仍把“页内偏移 ”之后整段转 Int，恒得 -1，令 `abs(offset) < 5` 类断言假通过、`> 300` 类断言必然失败。改为只读数字后，暴露两个基线即存在的问题（已用 HEAD 版 `SourceReaderView.swift` 复现）：上一章按钮恢复到历史页（本批已修）；`testLongPageBookmarkRestoresItsOffset` 点书签后停在页内偏移 5757 而非保存值，单章夹具、与窗口改动无关，**仍未修复**，需另查书签记录/列表首项。
+
+仍未覆盖：横向连续在真实手势下的前插定位只有共享几何测试；真机滚动中追加的流畅度、内存峰值未测。
 
 ## 范围与证据边界（审查基线）
 

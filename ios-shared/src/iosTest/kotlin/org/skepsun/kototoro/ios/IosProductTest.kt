@@ -147,6 +147,31 @@ class IosProductTest {
     }
 
     @Test
+    fun continuousWindowAppendsTheNextChapterWithoutMovingTheStripAndReportsItsShortTail() {
+        val first = (0..1).map { IosReaderPage("first", it) }
+        val second = listOf(IosReaderPage("second", 0))
+        for ((mode, reversed) in listOf(3 to false, 4 to false, 4 to true)) {
+            val reader = IosReader()
+            reader.setPages(reader.chapterWindow(emptyList(), first, emptyList(), Int.MAX_VALUE))
+            reader.configure(2, 600, 800, mode, false, false, 0, false, reversed)
+            repeat(2) { reader.setImageSize(it, 600, 800) }
+            val origin = reader.scrollOrigin(0, 100f)
+            val appended = reader.chapterWindow(emptyList(), first, second, Int.MAX_VALUE)
+            assertEquals(first + second, appended)
+            reader.setPages(appended)
+            if (mode == 3) reader.setImageSize(2, 600, 200) else reader.setImageSize(2, 150, 800)
+            // Appending keeps the physical strip start only in forward-growing layouts.
+            assertEquals(!reversed, origin == reader.scrollOrigin(0, 100f))
+            // A next chapter shorter than the screen never becomes the first visible page; the strip end shows it.
+            val end = if (reversed) 0f else reader.scrollLimit()
+            val x = if (mode == 3) 0f else end
+            val y = if (mode == 3) end else 0f
+            assertEquals(1, reader.progress(x, y).index)
+            assertEquals(2, reader.lastVisible(x, y))
+        }
+    }
+
+    @Test
     fun adjacentChapterSpreadsNeverPairAcrossTheBoundaryAndRetainCoverParity() {
         val reader = IosReader()
         reader.setPages(listOf(IosReaderPage("previous", 3), IosReaderPage("previous", 4),

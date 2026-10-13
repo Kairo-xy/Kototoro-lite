@@ -151,6 +151,74 @@ final class LocalImportTests: XCTestCase {
         attach("三章窗口裁剪保留实际画面和章内页码")
     }
 
+    /// Continuous strips join complete neighbor chapters: plain scrolling enters 02 and 03 and returns to 02 without
+    /// an explicit chapter switch, and the window stays bounded to three chapters.
+    @MainActor
+    func testContinuousStripScrollsIntoNeighborChapters() throws {
+        importFile(source: "LOCAL", file: "fixture_reader_window", reuse: true)
+        XCTAssertTrue(app.staticTexts["details.title"].waitForExistence(timeout: 30))
+        _ = revealChapter(in: app, timeout: 30)
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "chapter.", "01"))
+            .firstMatch.tap()
+        XCTAssertTrue(app.images["reader.image"].firstMatch.waitForExistence(timeout: 30))
+        selectReaderMode("条漫")
+        let canvas = app.scrollViews["reader.canvas"]
+        waitForChapterWindow(canvas, count: 6)
+        for chapter in ["02", "03"] {
+            scrollStrip(canvas, until: chapter, forward: true)
+            waitForReaderChapter(chapter)
+            XCTAssertEqual(app.staticTexts["reader.totalPages"].value as? String, "3")
+        }
+        waitForChapterWindow(canvas, count: 6)
+        scrollStrip(canvas, until: "02", forward: false)
+        // The first visible page reads: 02's last page at the top while 03 still fills the middle of the screen.
+        XCTAssertTrue(app.buttons["reader.chapters"].label.contains("02"))
+        XCTAssertEqual(app.staticTexts["reader.currentPage"].value as? String, "3")
+        waitForChapterWindow(canvas, count: 9)
+        dragStrip(canvas, forward: false)
+        waitForReaderChapter("02")
+        attach("连续条漫普通滚动跨章")
+    }
+
+    /// 02 is shorter than the screen, so it never becomes the first visible page: scrolling to the strip's end reads it.
+    @MainActor
+    func testContinuousStripEndEntersAShortNextChapter() throws {
+        importFile(source: "LOCAL", file: "fixture_reader_pull_long", reuse: true)
+        XCTAssertTrue(app.staticTexts["details.title"].waitForExistence(timeout: 30))
+        _ = revealChapter(in: app, timeout: 30)
+        app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "chapter.", "01"))
+            .firstMatch.tap()
+        XCTAssertTrue(app.images["reader.image"].firstMatch.waitForExistence(timeout: 30))
+        selectReaderMode("条漫")
+        let canvas = app.scrollViews["reader.canvas"]
+        waitForChapterWindow(canvas, count: 3)
+        app.sliders["reader.progress"].adjust(toNormalizedSliderPosition: 1)
+        let lastPage = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.app.staticTexts["reader.currentPage"].value as? String == "2"
+        }, object: nil)
+        wait(for: [lastPage], timeout: 10)
+        for _ in 0..<12 where !app.buttons["reader.chapters"].label.contains("02") {
+            canvas.swipeUp(velocity: .fast)
+            if !app.buttons["reader.more"].exists { canvas.tap() }
+        }
+        XCTAssertTrue(app.buttons["reader.chapters"].label.contains("02"), "\(canvas.value ?? "no position")")
+        waitForReaderChapter("02")
+        XCTAssertEqual(app.staticTexts["reader.currentPage"].value as? String, "1")
+        XCTAssertFalse(app.buttons["reader.nextChapter"].isEnabled)
+        attach("条漫末端进入短邻章")
+    }
+
+    private func scrollStrip(_ canvas: XCUIElement, until chapter: String, forward: Bool) {
+        for _ in 0..<12 where !app.buttons["reader.chapters"].label.contains(chapter) { dragStrip(canvas, forward: forward) }
+    }
+
+    private func dragStrip(_ canvas: XCUIElement, forward: Bool) {
+        let start = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: forward ? 0.7 : 0.3))
+        let end = canvas.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: forward ? 0.3 : 0.7))
+        start.press(forDuration: 0.05, thenDragTo: end, withVelocity: .slow, thenHoldForDuration: 0.1)
+        if !app.buttons["reader.more"].exists { canvas.tap() }
+    }
+
     @MainActor
     func testPreviousChapterButtonOpensTheChapterStart() throws {
         importFile(source: "LOCAL", file: "fixture_reader_pull_long", reuse: true)
@@ -486,7 +554,7 @@ final class LocalImportTests: XCTestCase {
         let farther = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             self.readingOffset(canvas) > saved + 200
         }, object: nil)
-        wait(for: [farther], timeout: 10)
+        XCTAssertEqual(XCTWaiter.wait(for: [farther], timeout: 10), .completed, "saved \(saved): \(canvas.value ?? "")")
         app.buttons["reader.chapters"].tap()
         app.segmentedControls.buttons["书签"].tap()
         let row = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "第 1 页")).firstMatch
@@ -495,13 +563,15 @@ final class LocalImportTests: XCTestCase {
         let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
             abs(self.readingOffset(canvas) - saved) < 5
         }, object: nil)
-        wait(for: [restored], timeout: 10)
+        XCTAssertEqual(XCTWaiter.wait(for: [restored], timeout: 10), .completed, "saved \(saved): \(canvas.value ?? "")")
         attach("长页书签恢复中段")
     }
 
     private func readingOffset(_ canvas: XCUIElement) -> Int {
         let value = canvas.value as? String ?? ""
-        return Int(value.components(separatedBy: "页内偏移 ").last ?? "") ?? -1
+        // The description continues after the offset (window size), so only its number is read.
+        let tail = value.components(separatedBy: "页内偏移 ").dropFirst().first ?? ""
+        return Int(tail.prefix { $0 == "-" || $0.isNumber }) ?? -1
     }
 
     private func selectReaderMode(_ mode: String) {
