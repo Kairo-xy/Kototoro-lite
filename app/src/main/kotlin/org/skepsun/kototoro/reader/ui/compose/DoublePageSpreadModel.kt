@@ -1,5 +1,8 @@
 package org.skepsun.kototoro.reader.ui.compose
 
+import org.skepsun.kototoro.reader.core.PageGeometryHint
+import org.skepsun.kototoro.reader.core.PageSegment
+import org.skepsun.kototoro.reader.core.WidePagePolicy
 import org.skepsun.kototoro.reader.ui.pager.ReaderPage
 
 internal data class DoublePageDisplayItem(
@@ -57,30 +60,65 @@ internal class DoublePageSpreadModel private constructor(
     companion object {
         const val SPACER_KEY = Long.MIN_VALUE
 
-        fun create(pageCount: Int): DoublePageSpreadModel {
-            require(pageCount >= 0) { "pageCount must not be negative" }
+        fun create(displayItems: List<DoublePageDisplayItem>): DoublePageSpreadModel {
+            val count = displayItems.size
+            if (count <= 0) return DoublePageSpreadModel(emptyList())
+
+            fun isWide(pos: Int): Boolean {
+                val item = displayItems.getOrNull(pos) ?: return false
+                val page = item.page ?: return false
+                val hint = page.geometryHint ?: return false
+                
+                val ratio = when (hint) {
+                    is PageGeometryHint.Exact -> if (hint.height > 0) hint.width.toFloat() / hint.height.toFloat() else 1f
+                    is PageGeometryHint.AspectRatio -> hint.ratio
+                    is PageGeometryHint.Estimated -> hint.ratio
+                }
+                
+                if (ratio > 1.15f) return true
+                if (page.segment == PageSegment.FULL && WidePagePolicy.isWidePage(hint)) return true
+                return false
+            }
+
             val spreads = buildList {
-                for (lower in 0 until pageCount step PAGES_PER_SPREAD) {
-                    add(
-                        DoublePageSpread(
-                            lowerPosition = lower,
-                            upperPosition = (lower + 1).coerceAtMost(pageCount - 1),
-                        ),
-                    )
+                var i = 0
+                while (i < count) {
+                    if (isWide(i) || displayItems[i].page == null) {
+                        add(DoublePageSpread(lowerPosition = i, upperPosition = i))
+                        i++
+                    } else if (i + 1 < count) {
+                        if (isWide(i + 1) || displayItems[i + 1].page == null) {
+                            add(DoublePageSpread(lowerPosition = i, upperPosition = i))
+                            i++
+                        } else {
+                            add(DoublePageSpread(lowerPosition = i, upperPosition = i + 1))
+                            i += 2
+                        }
+                    } else {
+                        add(DoublePageSpread(lowerPosition = i, upperPosition = i))
+                        i++
+                    }
                 }
             }
             return DoublePageSpreadModel(spreads)
         }
 
-        private const val PAGES_PER_SPREAD = 2
+        @Deprecated("Use overload with displayItems")
+        fun create(pageCount: Int): DoublePageSpreadModel {
+            val spreads = buildList {
+                for (lower in 0 until pageCount step 2) {
+                    add(DoublePageSpread(lowerPosition = lower, upperPosition = (lower + 1).coerceAtMost(pageCount - 1)))
+                }
+            }
+            return DoublePageSpreadModel(spreads)
+        }
     }
 
     fun spreadIndexForPage(position: Int): Int {
         if (spreads.isEmpty()) return 0
         val clampedPosition = position.coerceIn(0, spreads.last().upperPosition)
-        return (clampedPosition / PAGES_PER_SPREAD).coerceIn(spreads.indices)
+        return spreads.indexOfFirst { clampedPosition in it.positions }.coerceAtLeast(0)
     }
-
 }
 
 internal fun resolvePageNavigationTarget(
@@ -96,7 +134,7 @@ internal fun resolveDoublePageNavigationTarget(
 ): Int? {
     val currentDisplayPosition = displayItems.indexOfFirst { it.originalPosition == currentPosition }
     if (currentDisplayPosition < 0) return null
-    val spreadModel = DoublePageSpreadModel.create(displayItems.size)
+    val spreadModel = DoublePageSpreadModel.create(displayItems)
     val currentSpreadIndex = spreadModel.spreadIndexForPage(currentDisplayPosition)
     val targetSpread = spreadModel.spreads.getOrNull(currentSpreadIndex + delta) ?: return null
     val targetPositions = targetSpread.positions.mapNotNull { position ->
