@@ -209,7 +209,9 @@ class SourceTester @Inject constructor(
 	/** Returns null when the response is HTTP 200 and holds an image, otherwise a short reason. */
 	private fun verifyImage(response: Response): String? = response.use { r ->
 		if (!r.isSuccessful) return@use "HTTP ${r.code}"
-		val bytes = r.body?.bytes()
+		// Only the header bytes are needed to tell an image from an error page; downloading whole pages
+		// made slow hosts hit the step timeout when ten sources ran at once.
+		val bytes = runCatching { r.peekBody(VERIFY_PEEK_BYTES).bytes() }.getOrNull()
 		if (bytes == null || bytes.isEmpty()) return@use text(R.string.source_test_msg_empty_body)
 		val contentType = r.header("Content-Type").orEmpty()
 		if (contentType.startsWith("image/", ignoreCase = true)) return@use null
@@ -220,6 +222,10 @@ class SourceTester @Inject constructor(
 		} else {
 			"Content-Type: ${contentType.ifEmpty { "-" }}"
 		}
+	}
+
+	private companion object {
+		const val VERIFY_PEEK_BYTES = 64L * 1024
 	}
 
 	private fun isCloudflareBlocked(e: Throwable): Boolean {
