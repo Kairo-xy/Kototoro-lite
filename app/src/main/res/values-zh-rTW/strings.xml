@@ -1527,6 +1527,7 @@
     <string name="novel_epub_url_invalid">章節URL格式錯誤</string>
     <string name="novel_first_chapter">已經是第一章</string>
     <string name="novel_first_line_indent">段首縮進（兩個全角空格）</string>
+    <string name="novel_book_styles">書籍排版（EPUB 標題、對齊、粗斜體）</string>
     <string name="novel_font_size">字體大小</string>
     <string name="novel_fullscreen_mode">全屏模式（隱藏狀態欄）</string>
     <string name="novel_last_chapter">已經是最後一章</string>

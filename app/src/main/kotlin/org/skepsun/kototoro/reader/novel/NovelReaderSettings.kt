@@ -2,7 +2,6 @@ package org.skepsun.kototoro.reader.novel
 
 import android.content.Context
 import android.content.SharedPreferences
-import android.graphics.Color
 import androidx.annotation.StringRes
 import androidx.core.content.edit
 import androidx.preference.PreferenceManager
@@ -15,12 +14,12 @@ import kotlin.math.roundToInt
  * 小说阅读器设置
  */
 data class NovelReaderSettings(
-    val fontSizeSp: Float = 17f,
+    val fontSizeSp: Float = NovelReaderLimits.DEFAULT_FONT_SIZE,
     val font: NovelReaderFont = NovelReaderFont.SYSTEM_SERIF,
-    val lineSpacing: Float = 1.6f,
+    val lineSpacing: Float = NovelReaderLimits.DEFAULT_LINE_SPACING,
     val paragraphSpacing: Float = 0f,
-    val marginHorizontal: Int = 36,
-    val marginVertical: Int = 36,
+    val marginHorizontal: Int = NovelReaderLimits.DEFAULT_MARGIN,
+    val marginVertical: Int = NovelReaderLimits.DEFAULT_MARGIN,
     val themePreset: NovelReaderThemePreset = NovelReaderThemePreset.PAPER,
     val readingMode: ReadingMode = ReadingMode.PAGED,
     val pageTurnAnimation: NovelPageTurnAnimation = NovelPageTurnAnimation.SLIDE,
@@ -31,6 +30,8 @@ data class NovelReaderSettings(
     val chapterTitleAtBottom: Boolean = false,
     val isReadingStatusTransparent: Boolean = true,
     val enableParagraphIndent: Boolean = true, // 段首缩进两个全角空格
+    /** Apply an EPUB's own headings, alignment and emphasis (its style sheets) to the text. */
+    val useBookStyles: Boolean = true,
     /** Screen brightness override; null keeps the system brightness. */
     val screenBrightness: Float? = null,
     val isTranslationEnabled: Boolean = false,
@@ -94,6 +95,7 @@ data class NovelReaderSettings(
             putBoolean(KEY_CHAPTER_TITLE_AT_BOTTOM, normalized.chapterTitleAtBottom)
             putBoolean(KEY_READING_STATUS_TRANSPARENT, normalized.isReadingStatusTransparent)
             putBoolean(KEY_PARAGRAPH_INDENT, normalized.enableParagraphIndent)
+            putBoolean(KEY_BOOK_STYLES, normalized.useBookStyles)
             if (normalized.screenBrightness == null) {
                 remove(KEY_SCREEN_BRIGHTNESS)
             } else {
@@ -108,14 +110,14 @@ data class NovelReaderSettings(
     }
 
     companion object {
-        const val FONT_SIZE_STEP = 0.5f
-        const val LINE_SPACING_STEP = 0.1f
-        const val PARAGRAPH_SPACING_STEP = 1f
-        const val MARGIN_STEP = 4
-        val FONT_SIZE_RANGE = 14f..24f
-        val LINE_SPACING_RANGE = 1.2f..2.0f
-        val PARAGRAPH_SPACING_RANGE = 0f..3f
-        val MARGIN_RANGE = 12..120
+        const val FONT_SIZE_STEP = NovelReaderLimits.FONT_SIZE_STEP
+        const val LINE_SPACING_STEP = NovelReaderLimits.LINE_SPACING_STEP
+        const val PARAGRAPH_SPACING_STEP = NovelReaderLimits.PARAGRAPH_SPACING_STEP
+        const val MARGIN_STEP = NovelReaderLimits.MARGIN_STEP
+        val FONT_SIZE_RANGE = NovelReaderLimits.FONT_SIZE_RANGE
+        val LINE_SPACING_RANGE = NovelReaderLimits.LINE_SPACING_RANGE
+        val PARAGRAPH_SPACING_RANGE = NovelReaderLimits.PARAGRAPH_SPACING_RANGE
+        val MARGIN_RANGE = NovelReaderLimits.MARGIN_RANGE
         val SCREEN_BRIGHTNESS_RANGE = 0.1f..1f
 
         private const val PREF_NAME = "novel_reader_settings"
@@ -136,6 +138,7 @@ data class NovelReaderSettings(
         private const val KEY_CHAPTER_TITLE_AT_BOTTOM = "chapter_title_at_bottom"
         private const val KEY_READING_STATUS_TRANSPARENT = "reading_status_transparent"
         private const val KEY_PARAGRAPH_INDENT = "paragraph_indent"
+        private const val KEY_BOOK_STYLES = "book_styles"
         private const val KEY_SCREEN_BRIGHTNESS = "screen_brightness"
         private const val KEY_TRANSLATION_ENABLED = "translation_enabled"
         private const val KEY_TRANSLATION_DISPLAY_MODE = "translation_display_mode"
@@ -187,6 +190,7 @@ data class NovelReaderSettings(
                 ),
                 isReadingStatusTransparent = prefs.getBoolean(KEY_READING_STATUS_TRANSPARENT, true),
                 enableParagraphIndent = prefs.getBoolean(KEY_PARAGRAPH_INDENT, true),
+                useBookStyles = prefs.getBoolean(KEY_BOOK_STYLES, true),
                 screenBrightness = prefs.getSafeFloat(KEY_SCREEN_BRIGHTNESS, -1f)
                     .takeIf { it >= 0f },
                 isTranslationEnabled = false,
@@ -232,18 +236,6 @@ internal fun resolveNovelChapterTitleAtBottom(
     legacyValue: Boolean,
 ): Boolean = commonValue ?: legacyValue
 
-enum class NovelReaderThemePreset {
-    PAPER,
-    SEPIA,
-    MOSS,
-    SLATE,
-}
-
-enum class NovelPageTurnAnimation {
-    SLIDE,
-    SIMULATION,
-}
-
 enum class NovelReaderFont(@StringRes val displayNameRes: Int) {
     SOURCE_HAN_SERIF(R.string.novel_reader_font_source_han_serif),
     LXGW_WENKAI(R.string.novel_reader_font_lxgw_wenkai),
@@ -270,126 +262,16 @@ fun novelReaderPalette(
     preset: NovelReaderThemePreset,
     isDarkTheme: Boolean,
 ): NovelReaderPalette {
-    return when (preset) {
-        NovelReaderThemePreset.PAPER -> if (isDarkTheme) {
-            NovelReaderPalette(
-                backgroundColor = Color.parseColor("#221F1B"),
-                textColor = Color.parseColor("#DED6C9"),
-                secondaryTextColor = Color.parseColor("#B7AEA0"),
-                chromeBackgroundColor = Color.parseColor("#2D2924"),
-                chromeTextColor = Color.parseColor("#E6DED1"),
-                highlightColor = Color.parseColor("#4DB68A4A"),
-                placeholderColor = Color.parseColor("#3B352F"),
-                placeholderTextColor = Color.parseColor("#B7AEA0"),
-                isDark = true,
-            )
-        } else {
-            NovelReaderPalette(
-                backgroundColor = Color.parseColor("#F4ECD8"),
-                textColor = Color.parseColor("#4F4032"),
-                secondaryTextColor = Color.parseColor("#7A6A59"),
-                chromeBackgroundColor = Color.parseColor("#E7DDC5"),
-                chromeTextColor = Color.parseColor("#544436"),
-                highlightColor = Color.parseColor("#4DA67C2E"),
-                placeholderColor = Color.parseColor("#DDD2BC"),
-                placeholderTextColor = Color.parseColor("#7A6A59"),
-                isDark = false,
-            )
-        }
-
-        NovelReaderThemePreset.SEPIA -> if (isDarkTheme) {
-            NovelReaderPalette(
-                backgroundColor = Color.parseColor("#2A241D"),
-                textColor = Color.parseColor("#E4D4B8"),
-                secondaryTextColor = Color.parseColor("#B9A58A"),
-                chromeBackgroundColor = Color.parseColor("#342D25"),
-                chromeTextColor = Color.parseColor("#EFDFC2"),
-                highlightColor = Color.parseColor("#4DBA8748"),
-                placeholderColor = Color.parseColor("#43382D"),
-                placeholderTextColor = Color.parseColor("#B9A58A"),
-                isDark = true,
-            )
-        } else {
-            NovelReaderPalette(
-                backgroundColor = Color.parseColor("#F1E4CC"),
-                textColor = Color.parseColor("#5A4330"),
-                secondaryTextColor = Color.parseColor("#8A7057"),
-                chromeBackgroundColor = Color.parseColor("#E4D3B7"),
-                chromeTextColor = Color.parseColor("#614734"),
-                highlightColor = Color.parseColor("#4DA87B2C"),
-                placeholderColor = Color.parseColor("#DCC7A6"),
-                placeholderTextColor = Color.parseColor("#8A7057"),
-                isDark = false,
-            )
-        }
-
-        NovelReaderThemePreset.MOSS -> if (isDarkTheme) {
-            NovelReaderPalette(
-                backgroundColor = Color.parseColor("#1F2520"),
-                textColor = Color.parseColor("#D5DDD2"),
-                secondaryTextColor = Color.parseColor("#A5B19E"),
-                chromeBackgroundColor = Color.parseColor("#293029"),
-                chromeTextColor = Color.parseColor("#E0E7DB"),
-                highlightColor = Color.parseColor("#4D7DA062"),
-                placeholderColor = Color.parseColor("#333B34"),
-                placeholderTextColor = Color.parseColor("#A5B19E"),
-                isDark = true,
-            )
-        } else {
-            NovelReaderPalette(
-                backgroundColor = Color.parseColor("#E6E9DB"),
-                textColor = Color.parseColor("#36402E"),
-                secondaryTextColor = Color.parseColor("#61705A"),
-                chromeBackgroundColor = Color.parseColor("#D6DBC8"),
-                chromeTextColor = Color.parseColor("#3D4735"),
-                highlightColor = Color.parseColor("#4D6F8A42"),
-                placeholderColor = Color.parseColor("#C8D0BA"),
-                placeholderTextColor = Color.parseColor("#61705A"),
-                isDark = false,
-            )
-        }
-
-        NovelReaderThemePreset.SLATE -> if (isDarkTheme) {
-            NovelReaderPalette(
-                backgroundColor = Color.parseColor("#1D2329"),
-                textColor = Color.parseColor("#D7DDE2"),
-                secondaryTextColor = Color.parseColor("#AEB8C0"),
-                chromeBackgroundColor = Color.parseColor("#252D34"),
-                chromeTextColor = Color.parseColor("#E3E8EC"),
-                highlightColor = Color.parseColor("#4D5F8EAD"),
-                placeholderColor = Color.parseColor("#313A42"),
-                placeholderTextColor = Color.parseColor("#AEB8C0"),
-                isDark = true,
-            )
-        } else {
-            NovelReaderPalette(
-                backgroundColor = Color.parseColor("#E8EDF1"),
-                textColor = Color.parseColor("#3A4650"),
-                secondaryTextColor = Color.parseColor("#66737D"),
-                chromeBackgroundColor = Color.parseColor("#DCE4EA"),
-                chromeTextColor = Color.parseColor("#404B54"),
-                highlightColor = Color.parseColor("#4D6D93B0"),
-                placeholderColor = Color.parseColor("#CED8DF"),
-                placeholderTextColor = Color.parseColor("#66737D"),
-                isDark = false,
-            )
-        }
-    }
-}
-
-/**
- * 阅读模式
- */
-enum class ReadingMode {
-    PAGED,      // 分页模式
-    SCROLL,     // 滚动模式
-    VERTICAL,   // 竖排模式（从右到左翻页）
-}
-
-/**
- * 文本方向
- */
-enum class TextDirection {
-    LTR,  // 从左到右
-    RTL,  // 从右到左
+    val colors = novelReaderColors(preset, isDarkTheme)
+    return NovelReaderPalette(
+        backgroundColor = colors.background.toInt(),
+        textColor = colors.text.toInt(),
+        secondaryTextColor = colors.secondaryText.toInt(),
+        chromeBackgroundColor = colors.chromeBackground.toInt(),
+        chromeTextColor = colors.chromeText.toInt(),
+        highlightColor = colors.highlight.toInt(),
+        placeholderColor = colors.placeholder.toInt(),
+        placeholderTextColor = colors.placeholderText.toInt(),
+        isDark = colors.isDark,
+    )
 }

@@ -272,6 +272,12 @@ private fun NovelTypographyPage(
             checked = settings.enableParagraphIndent,
             onCheckedChange = { update { copy(enableParagraphIndent = it) } },
         )
+        ReaderOptionDivider()
+        ReaderOptionSwitchRow(
+            label = stringResource(R.string.novel_book_styles),
+            checked = settings.useBookStyles,
+            onCheckedChange = { update { copy(useBookStyles = it) } },
+        )
     },
 )
 

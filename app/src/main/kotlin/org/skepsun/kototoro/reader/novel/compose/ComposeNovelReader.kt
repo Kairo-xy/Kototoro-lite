@@ -92,7 +92,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.delay
+import org.skepsun.kototoro.reader.novel.NovelDocumentBlock
+import org.skepsun.kototoro.reader.novel.NovelStyledText
+import org.skepsun.kototoro.reader.novel.formatParagraph
 import org.skepsun.kototoro.reader.novel.NovelPage
+import org.skepsun.kototoro.reader.novel.buildNovelDocument
+import org.skepsun.kototoro.reader.novel.formatNovelParagraphText
+import org.skepsun.kototoro.reader.novel.novelPageForProgress
+import org.skepsun.kototoro.reader.novel.splitNovelPageLineRanges
 import org.skepsun.kototoro.reader.novel.NovelReaderThemePreset
 import org.skepsun.kototoro.reader.novel.NovelPageTurnAnimation
 import org.skepsun.kototoro.reader.novel.NovelReaderSettings
@@ -262,6 +269,7 @@ fun ComposeNovelChapter(
     listState: LazyListState? = null,
     markingHighlightRange: IntRange? = null,
     markingHighlightText: String? = null,
+    bookStyles: NovelStyledText? = null,
     modifier: Modifier = Modifier,
 ) {
     val actualListState = listState ?: rememberLazyListState()
@@ -269,7 +277,16 @@ fun ComposeNovelChapter(
     val palette = novelReaderPalette(settings.themePreset, isSystemInDarkTheme())
     val contentColor = Color(palette.textColor)
     val blocks = androidx.compose.runtime.remember(content, translation) {
-        buildNovelComposeDocument(content, translation)
+        buildNovelDocument(content, translation)
+    }
+    val styledBlocks = androidx.compose.runtime.remember(
+        blocks, bookStyles, settings.useBookStyles, settings.enableParagraphIndent, settings.paragraphSpacingLines,
+    ) {
+        if (settings.useBookStyles) {
+            styleNovelBlocks(blocks, bookStyles, settings.enableParagraphIndent, settings.paragraphSpacingLines)
+        } else {
+            emptyMap()
+        }
     }
     LaunchedEffect(markingHighlightRange, markingHighlightText, blocks) {
         val range = markingHighlightRange
@@ -277,7 +294,7 @@ fun ComposeNovelChapter(
         if (range == null && cleanText.isEmpty()) return@LaunchedEffect
         val targetBlockIndex = blocks.indexOfFirst { item ->
             when (item) {
-                is NovelComposeBlock.Text -> {
+                is NovelDocumentBlock.Text -> {
                     val textMatch = cleanText.isNotEmpty() && item.original.contains(cleanText)
                     val rangeMatch = range != null && item.sourceRange?.let {
                         range.first in it || it.first in range
@@ -322,19 +339,19 @@ fun ComposeNovelChapter(
         ) {
             items(count = blocks.size, key = { index ->
                 when (val block = blocks[index]) {
-                    is NovelComposeBlock.Image -> block.key
-                    is NovelComposeBlock.Text -> block.key
+                    is NovelDocumentBlock.Image -> block.key
+                    is NovelDocumentBlock.Text -> block.key
                 }
             }) { index ->
                 when (val block = blocks[index]) {
-                    is NovelComposeBlock.Image -> NovelComposeImage(
+                    is NovelDocumentBlock.Image -> NovelComposeImage(
                         path = block.path,
                         imageModel = imageModel,
                         imageContext = imageContext,
                         onClick = onImageClick,
                     )
 
-                    is NovelComposeBlock.Text -> {
+                    is NovelDocumentBlock.Text -> {
                         val original = formatNovelParagraphText(
                             text = block.original,
                             indentEnabled = settings.enableParagraphIndent,
@@ -358,7 +375,7 @@ fun ComposeNovelChapter(
                             if (block.inlineImages.isEmpty()) {
                                 NovelMarkingText(
                                     text = highlightedNovelText(
-                                        text = original,
+                                        text = styledBlocks[block.key]?.toAnnotatedString(style) ?: AnnotatedString(original),
                                         sourceRange = block.sourceRange,
                                         highlightRange = null,
                                         highlightColor = MaterialTheme.colorScheme.secondaryContainer,
@@ -415,14 +432,14 @@ fun ComposeNovelChapter(
 
 private data class NovelComposeWindowBlock(
     val chapter: NovelComposeChapterContent,
-    val block: NovelComposeBlock,
+    val block: NovelDocumentBlock,
     val chapterBlockIndex: Int,
     val chapterBlockCount: Int,
 )
 
 private fun buildNovelComposeWindowBlocks(chapters: List<NovelComposeChapterContent>): List<NovelComposeWindowBlock> {
     return chapters.flatMap { chapter ->
-        val chapterBlocks = buildNovelComposeDocument(chapter.content, chapter.translation)
+        val chapterBlocks = buildNovelDocument(chapter.content, chapter.translation)
         chapterBlocks.mapIndexed { index, block ->
             NovelComposeWindowBlock(
                 chapter = chapter,
@@ -457,10 +474,23 @@ private fun ComposeNovelChapterWindow(
     markingHighlightRange: IntRange? = null,
     markingHighlightText: String? = null,
     activeChapterId: Long = 0L,
+    bookStyles: Map<Long, NovelStyledText> = emptyMap(),
 ) {
     val palette = novelReaderPalette(settings.themePreset, isSystemInDarkTheme())
     val fontFamily = rememberNovelReaderFontFamily(settings.font)
     val contentColor = Color(palette.textColor)
+    val styledBlocks = androidx.compose.runtime.remember(
+        chapters, bookStyles, settings.useBookStyles, settings.enableParagraphIndent, settings.paragraphSpacingLines,
+    ) {
+        if (!settings.useBookStyles) return@remember emptyMap()
+        chapters.flatMap { chapter ->
+            val styles = bookStyles[chapter.chapterId] ?: return@flatMap emptyList()
+            styleNovelBlocks(
+                buildNovelDocument(chapter.content, chapter.translation), styles,
+                settings.enableParagraphIndent, settings.paragraphSpacingLines,
+            ).map { (key, paragraph) -> "${chapter.chapterIndex}:$key" to paragraph }
+        }.toMap()
+    }
     val blocks = androidx.compose.runtime.remember(chapters) {
         buildNovelComposeWindowBlocks(chapters)
     }
@@ -470,7 +500,7 @@ private fun ComposeNovelChapterWindow(
         if (range == null && cleanText.isEmpty()) return@LaunchedEffect
         val targetBlockIndex = blocks.indexOfFirst { item ->
             if (item.chapter.chapterId != activeChapterId) return@indexOfFirst false
-            val textBlock = item.block as? NovelComposeBlock.Text
+            val textBlock = item.block as? NovelDocumentBlock.Text
             if (textBlock != null) {
                 val textMatch = cleanText.isNotEmpty() && textBlock.original.contains(cleanText)
                 val rangeMatch = range != null && textBlock.sourceRange?.let {
@@ -535,22 +565,22 @@ private fun ComposeNovelChapterWindow(
                 key = { index ->
                     val item = blocks[index]
                     val blockKey = when (val block = item.block) {
-                        is NovelComposeBlock.Image -> block.key
-                        is NovelComposeBlock.Text -> block.key
+                        is NovelDocumentBlock.Image -> block.key
+                        is NovelDocumentBlock.Text -> block.key
                     }
                     "${item.chapter.chapterIndex}:$blockKey"
                 },
             ) { index ->
                 val item = blocks[index]
                 when (val block = item.block) {
-                    is NovelComposeBlock.Image -> NovelComposeImage(
+                    is NovelDocumentBlock.Image -> NovelComposeImage(
                         path = block.path,
                         imageModel = imageModel,
                         imageContext = item.chapter.imageContext,
                         onClick = onImageClick,
                     )
 
-                    is NovelComposeBlock.Text -> {
+                    is NovelDocumentBlock.Text -> {
                         val original = formatNovelParagraphText(
                             text = block.original,
                             indentEnabled = settings.enableParagraphIndent,
@@ -573,7 +603,8 @@ private fun ComposeNovelChapterWindow(
                         if (block.translation == null) {
                             if (block.inlineImages.isEmpty()) NovelMarkingText(
                                 text = highlightedNovelText(
-                                    text = original,
+                                    text = styledBlocks["${item.chapter.chapterIndex}:${block.key}"]
+                                        ?.toAnnotatedString(style) ?: AnnotatedString(original),
                                     sourceRange = block.sourceRange,
                                     highlightRange = ttsHighlightRange,
                                     highlightColor = MaterialTheme.colorScheme.secondaryContainer,
@@ -785,7 +816,7 @@ fun ComposeNovelReaderRoute(
             )
             val bookmarkPositions = remember(windowBlocks, state.novelBookmarks, state.chapters) {
                 resolveNovelBookmarkPositions(windowBlocks.map {
-                    it.chapter.chapterId to ((it.block as? NovelComposeBlock.Text)?.original.orEmpty())
+                    it.chapter.chapterId to ((it.block as? NovelDocumentBlock.Text)?.original.orEmpty())
                 }, state.novelBookmarks, state.chapters)
             }
             LaunchedEffect(bookmarkPositions) { viewModel.publishBookmarkPositions(bookmarkPositions) }
@@ -820,7 +851,7 @@ fun ComposeNovelReaderRoute(
                     viewModel.publishScrollPosition(position)
                     windowBlocks.getOrNull(position.firstVisibleBlock)?.let { visible ->
                         viewModel.publishBookmarkText(visible.chapter.chapterId,
-                            (visible.block as? NovelComposeBlock.Text)?.original.orEmpty())
+                            (visible.block as? NovelDocumentBlock.Text)?.original.orEmpty())
                     }
                 }
             }
@@ -860,6 +891,7 @@ fun ComposeNovelReaderRoute(
                     markingHighlightRange = state.markingHighlightRange,
                     markingHighlightText = state.markingHighlightText,
                     activeChapterId = state.chapterId,
+                    bookStyles = state.bookStyles,
                 )
             } else {
                 ComposeNovelChapter(
@@ -880,6 +912,7 @@ fun ComposeNovelReaderRoute(
                     listState = listState,
                     markingHighlightRange = state.markingHighlightRange,
                     markingHighlightText = state.markingHighlightText,
+                    bookStyles = state.bookStyles[state.chapterId],
                     modifier = modifier,
                 )
             }
@@ -1271,6 +1304,8 @@ private data class NovelPaginationChapter(
     val chapterIndex: Int,
     val content: String,
     val translation: NovelChapterTranslation?,
+    /** The book's styles, when book layout is on and the chapter is an EPUB document. */
+    val styles: NovelStyledText? = null,
 )
 
 private data class NovelPaginationLayoutKey(
@@ -1329,7 +1364,8 @@ internal fun resolveNovelPageRequest(
     val chapterEnd = pages.indexOfLast {
         it.chapterId == request.chapterId && it.chapterIndex == request.chapterIndex
     }
-    return (chapterStart + request.page).coerceIn(chapterStart, chapterEnd)
+    val page = request.progress?.let { novelPageForProgress(it, chapterEnd - chapterStart + 1) } ?: request.page
+    return (chapterStart + page).coerceIn(chapterStart, chapterEnd)
 }
 
 internal fun findNovelPageForMarking(
@@ -1381,27 +1417,6 @@ internal fun findNovelPageForMarking(
     return candidatePages.minByOrNull { (_, page) ->
         kotlin.math.abs(page.charStart - target.startOffset)
     }?.first ?: candidatePages.first().first
-}
-
-internal fun splitNovelPageLineRanges(
-    lineCount: Int,
-    pageHeightPx: Int,
-    lineTop: (Int) -> Float,
-    lineBottom: (Int) -> Float,
-): List<IntRange> {
-    if (lineCount <= 0 || pageHeightPx <= 0) return emptyList()
-    return buildList {
-        var firstLine = 0
-        while (firstLine < lineCount) {
-            val pageTop = lineTop(firstLine)
-            var lastLine = firstLine
-            while (lastLine + 1 < lineCount && lineBottom(lastLine + 1) - pageTop <= pageHeightPx) {
-                lastLine++
-            }
-            add(firstLine..lastLine)
-            firstLine = lastLine + 1
-        }
-    }
 }
 
 @OptIn(ExperimentalFoundationApi::class, ExperimentalLayoutApi::class)
@@ -1500,13 +1515,17 @@ private fun ComposeNovelPagedChapter(
                     if (settings.showReadingStatus) NovelReadingStatusReservedHeight else 0.dp
                 ).coerceAtLeast(1.dp).roundToPx()
         }
-        val paginationChapters = androidx.compose.runtime.remember(chapters, state.chapterId, state.content, state.translation) {
+        val paginationChapters = androidx.compose.runtime.remember(
+            chapters, state.chapterId, state.content, state.translation, state.bookStyles, settings.useBookStyles,
+        ) {
+            fun styles(chapterId: Long) = state.bookStyles[chapterId].takeIf { settings.useBookStyles }
             chapters.map { chapter ->
                 NovelPaginationChapter(
                     chapterId = chapter.chapterId,
                     chapterIndex = chapter.chapterIndex,
                     content = chapter.content,
                     translation = chapter.translation,
+                    styles = styles(chapter.chapterId),
                 )
             }.ifEmpty {
                 listOf(
@@ -1515,6 +1534,7 @@ private fun ComposeNovelPagedChapter(
                         chapterIndex = state.chapterIndex,
                         content = state.content,
                         translation = state.translation,
+                        styles = styles(state.chapterId),
                     ),
                 )
             }
@@ -1905,7 +1925,8 @@ private fun ComposeNovelPagedChapter(
                         ) {
                             NovelMarkingText(
                                 text = highlightedNovelText(
-                                    text = page.value.text,
+                                    // The page's own styled text, so the book's layout survives the highlighting.
+                                    text = page.value,
                                     sourceRange = page.charStart..page.charEnd,
                                     highlightRange = null,
                                     highlightColor = MaterialTheme.colorScheme.secondaryContainer,
@@ -2074,7 +2095,7 @@ private fun NovelPageReadingStatus(
 }
 
 private suspend fun paginateNovelComposeDocument(
-    blocks: List<NovelComposeBlock>,
+    blocks: List<NovelDocumentBlock>,
     chapterId: Long,
     chapterIndex: Int,
     textMeasurer: androidx.compose.ui.text.TextMeasurer,
@@ -2083,8 +2104,10 @@ private suspend fun paginateNovelComposeDocument(
     heightPx: Int,
     paragraphSpacingLines: Int,
     paragraphIndentEnabled: Boolean,
+    styles: NovelStyledText? = null,
 ): List<NovelComposePage> {
     if (widthPx <= 0 || heightPx <= 0) return emptyList()
+    var styleCursor = 0
     val pages = mutableListOf<NovelComposePage>()
     var textBatch = AnnotatedString.Builder()
     var textBatchSourceStart = 0
@@ -2127,7 +2150,7 @@ private suspend fun paginateNovelComposeDocument(
     for (block in blocks) {
         currentCoroutineContext().ensureActive()
         when (block) {
-            is NovelComposeBlock.Image -> {
+            is NovelDocumentBlock.Image -> {
                 flushTextBatch()
                 pages += NovelComposePage.Image(
                     path = block.path,
@@ -2138,19 +2161,26 @@ private suspend fun paginateNovelComposeDocument(
                     charEnd = 0,
                 )
             }
-            is NovelComposeBlock.Text -> {
+            is NovelDocumentBlock.Text -> {
+                val translation = block.translation
+                // The book's styles, found after the previous styled block; changed text stays plain.
+                val styled = styles?.takeIf { translation == null && block.inlineImages.isEmpty() }
+                    ?.formatParagraph(block.original, styleCursor, paragraphIndentEnabled, paragraphSpacingLines)
+                    ?.also { styleCursor = it.second }
+                    ?.first?.toAnnotatedString(style)
                 val displayed = when {
-                    block.translation == null -> formatNovelParagraphText(
+                    styled != null -> styled
+                    translation == null -> formatNovelParagraphText(
                         block.original,
                         paragraphIndentEnabled,
                         paragraphSpacingLines,
                     )
                     block.displayMode == NovelTranslationDisplayMode.TRANSLATION_ONLY -> formatNovelParagraphText(
-                        block.translation,
+                        translation,
                         paragraphIndentEnabled,
                         paragraphSpacingLines,
                     )
-                    else -> listOf(block.original, block.translation).joinToString(
+                    else -> listOf(block.original, translation).joinToString(
                         separator = "\n".repeat(paragraphSpacingLines + 1),
                     ) { text ->
                         formatNovelParagraphText(text, paragraphIndentEnabled, paragraphSpacingLines)
@@ -2162,7 +2192,7 @@ private suspend fun paginateNovelComposeDocument(
                     } else {
                         textBatchSourceStart = block.sourceRange?.first ?: 0
                     }
-                    textBatch.append(displayed)
+                    if (displayed is AnnotatedString) textBatch.append(displayed) else textBatch.append(displayed.toString())
                 }
                 if (block.inlineImages.isNotEmpty()) {
                     flushTextBatch()
@@ -2198,7 +2228,7 @@ private suspend fun paginateNovelComposeChapterWindow(
             currentCoroutineContext().ensureActive()
             addAll(
                 paginateNovelComposeDocument(
-                    blocks = buildNovelComposeDocument(chapter.content, chapter.translation),
+                    blocks = buildNovelDocument(chapter.content, chapter.translation),
                     chapterId = chapter.chapterId,
                     chapterIndex = chapter.chapterIndex,
                     textMeasurer = textMeasurer,
@@ -2207,6 +2237,7 @@ private suspend fun paginateNovelComposeChapterWindow(
                     heightPx = heightPx,
                     paragraphSpacingLines = paragraphSpacingLines,
                     paragraphIndentEnabled = paragraphIndentEnabled,
+                    styles = chapter.styles,
                 ),
             )
         }
@@ -2215,6 +2246,20 @@ private suspend fun paginateNovelComposeChapterWindow(
 
 private fun highlightedNovelText(
     text: String,
+    sourceRange: IntRange?,
+    highlightRange: IntRange?,
+    highlightColor: androidx.compose.ui.graphics.Color,
+    markings: List<NovelMarkingEntity> = emptyList(),
+    transientHighlightRange: IntRange? = null,
+    transientHighlightText: String? = null,
+): androidx.compose.ui.text.AnnotatedString = highlightedNovelText(
+    AnnotatedString(text), sourceRange, highlightRange, highlightColor, markings, transientHighlightRange,
+    transientHighlightText,
+)
+
+/** [text] keeps its own styles (the book's layout); highlights are laid over them. */
+private fun highlightedNovelText(
+    text: AnnotatedString,
     sourceRange: IntRange?,
     highlightRange: IntRange?,
     highlightColor: androidx.compose.ui.graphics.Color,
@@ -2239,7 +2284,7 @@ private fun highlightedNovelText(
             }
             if (!transientHighlightText.isNullOrBlank()) {
                 val clean = transientHighlightText.trim()
-                val matchIdx = text.indexOf(clean)
+                val matchIdx = text.text.indexOf(clean)
                 if (matchIdx >= 0) {
                     addStyle(
                         SpanStyle(background = transientHighlightColor),
@@ -2248,7 +2293,7 @@ private fun highlightedNovelText(
                     )
                 } else if (clean.length > 8) {
                     val prefix = clean.take(12.coerceAtMost(clean.length))
-                    val prefixIdx = text.indexOf(prefix)
+                    val prefixIdx = text.text.indexOf(prefix)
                     if (prefixIdx >= 0) {
                         addStyle(
                             SpanStyle(background = transientHighlightColor),

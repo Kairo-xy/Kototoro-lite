@@ -1,5 +1,6 @@
 package org.skepsun.kototoro.reader.novel.compose
 
+import org.skepsun.kototoro.reader.novel.novelProgressScroll
 import org.skepsun.kototoro.reader.ui.ReaderState
 
 /**
@@ -23,10 +24,6 @@ data class NovelReadingPosition(
     fun toReaderState(): ReaderState = ReaderState(
         chapterId = chapterId,
         page = page,
-        scroll = (normalizedChapterProgress * PROGRESS_SCALE).toInt(),
+        scroll = novelProgressScroll(normalizedChapterProgress),
     )
-
-    companion object {
-        private const val PROGRESS_SCALE = 10_000f
-    }
 }

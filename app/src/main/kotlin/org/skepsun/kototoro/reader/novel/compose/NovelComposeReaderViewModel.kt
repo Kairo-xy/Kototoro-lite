@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import org.skepsun.kototoro.reader.novel.NovelChapterTranslation
+import org.skepsun.kototoro.reader.novel.NovelStyledText
 import org.skepsun.kototoro.reader.novel.NovelReaderSettings
 import org.skepsun.kototoro.reader.novel.ReadingMode
 import org.skepsun.kototoro.core.replace.ReplaceRule
@@ -34,6 +35,8 @@ data class NovelComposeReaderUiState(
     val chapterIndex: Int = 0,
     val chapterTitle: String = "",
     val content: String = "",
+    /** EPUB chapters' own styles by chapter id, matched to their paragraphs while laying them out. */
+    val bookStyles: Map<Long, NovelStyledText> = emptyMap(),
     val replaceRulesEnabled: Boolean = true,
     val replaceRules: List<ReplaceRule> = emptyList(),
     val replaceRulesOrigin: String = "",
@@ -97,6 +100,8 @@ data class NovelPageRequest(
     val chapterId: Long,
     val chapterIndex: Int,
     val page: Int,
+    /** Chapter progress to resolve against the current pagination instead of [page]. */
+    val progress: Float? = null,
 )
 
 @Immutable
@@ -229,13 +234,19 @@ class NovelComposeReaderViewModel @Inject constructor() : ViewModel() {
         )
     }
 
-    fun requestPage(page: Int) {
+    fun requestPage(page: Int) = request(page = page.coerceAtLeast(0), progress = null)
+
+    /** Moves to the page of the current chapter holding [progress], once the chapter is paginated. */
+    fun requestProgress(progress: Float) = request(page = 0, progress = progress.coerceIn(0f, 1f))
+
+    private fun request(page: Int, progress: Float?) {
         val state = _uiState.value
         val request = NovelPageRequest(
             id = ++nextPageRequestId,
             chapterId = state.chapterId,
             chapterIndex = state.chapterIndex,
-            page = page.coerceAtLeast(0),
+            page = page,
+            progress = progress,
         )
         _uiState.value = _uiState.value.copy(
             pageRequest = request,
@@ -243,7 +254,8 @@ class NovelComposeReaderViewModel @Inject constructor() : ViewModel() {
         )
         android.util.Log.d(
             NOVEL_PAGER_LOG_TAG,
-            "request id=${request.id} chapter=${request.chapterIndex}/${request.chapterId} page=${request.page}",
+            "request id=${request.id} chapter=${request.chapterIndex}/${request.chapterId} page=${request.page} " +
+                "progress=${request.progress}",
         )
     }
 
@@ -403,6 +415,14 @@ class NovelComposeReaderViewModel @Inject constructor() : ViewModel() {
                 if (chapter.chapterIndex == state.chapterIndex) chapter.copy(translation = translation) else chapter
             },
         )
+    }
+
+    fun publishBookStyles(chapterId: Long, styles: NovelStyledText) {
+        val state = _uiState.value
+        // Keep the chapters around the window; older ones are laid out again only if revisited.
+        val kept = state.bookStyles.filterKeys { it == chapterId || it == state.chapterId ||
+            state.continuousChapters.any { chapter -> chapter.chapterId == it } }
+        _uiState.value = state.copy(bookStyles = kept + (chapterId to styles))
     }
 
     fun publishPosition(position: NovelReadingPosition) {

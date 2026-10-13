@@ -1083,6 +1083,7 @@
     <string name="novel_margin_horizontal">左右边距</string>
     <string name="novel_margin_vertical">上下边距</string>
     <string name="novel_first_line_indent">段首缩进</string>
+    <string name="novel_book_styles">书籍排版（EPUB 标题、对齐、粗斜体）</string>
     <string name="novel_dual_page_mode">双页模式</string>
     <string name="novel_fullscreen_mode">全屏模式</string>
     <string name="novel_show_reading_status">显示阅读状态</string>

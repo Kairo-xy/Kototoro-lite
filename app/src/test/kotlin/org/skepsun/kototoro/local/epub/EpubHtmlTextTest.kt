@@ -40,4 +40,12 @@ class EpubHtmlTextTest {
 		assertTrue(epubHtmlToText(html, keepImages = true).contains("📷 [图片: ../img/a.jpg]"))
 		assertFalse(epubHtmlToText(html, keepImages = false).contains("📷"))
 	}
+
+	@Test
+	fun `ruby readings and numeric entities do not leak into the text`() {
+		assertEquals(
+			"漢字 あ",
+			epubHtmlToText("<p><ruby>漢<rt>かん</rt>字<rt>じ</rt></ruby> &#x3042;</p>", keepImages = false),
+		)
+	}
 }

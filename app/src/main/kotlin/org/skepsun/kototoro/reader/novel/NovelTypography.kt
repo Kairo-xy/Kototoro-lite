@@ -9,7 +9,6 @@ import android.text.style.RelativeSizeSpan
 
 object NovelTypography {
 
-    private val titleLinePattern = Regex("""^[《【].+[》】]$|^第[0-9一二三四五六七八九十百千零〇两]+[章节卷回部篇话集].*$""")
     private val westernSpacingPattern = Regex("""([\p{IsHan}])([A-Za-z0-9@#&])|([A-Za-z0-9@#&])([\p{IsHan}])""")
 
     fun prepareContentText(
@@ -158,10 +157,5 @@ object NovelTypography {
         }
     }
 
-    internal fun isChapterTitleLine(line: String): Boolean {
-        val trimmed = line.trim()
-        if (trimmed.isBlank()) return false
-        if (trimmed.length > 40) return false
-        return titleLinePattern.matches(trimmed)
-    }
+    internal fun isChapterTitleLine(line: String): Boolean = isNovelChapterTitleLine(line)
 }

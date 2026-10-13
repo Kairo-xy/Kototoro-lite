@@ -2300,7 +2300,8 @@ class NovelReaderActivity :
             val targetIndex = resolveLocalChapterIndex(candidate.chapterId)
             if (targetIndex >= 0) {
                 currentChapterIndex = targetIndex
-                desiredProgressRatio = candidate.scroll.takeIf { it > 0 }?.let { it / 10000f }
+                // The stored chapter progress is portable (other layouts, the iOS reader); the page is only a fallback.
+                desiredProgressRatio = novelScrollProgress(candidate.scroll.toFloat())
                 currentPageIndex = candidate.page
                 android.util.Log.d(
                     "NovelReaderActivity",
@@ -2860,12 +2861,9 @@ class NovelReaderActivity :
         )
         val hasPendingMarking = composeReaderViewModel.uiState.value.pendingMarkingTarget?.chapterId == chapter.id ||
             composeReaderViewModel.uiState.value.bookmarkRequest?.bookmark?.chapterId == chapter.id
-        if (readerSettings.readingMode == ReadingMode.PAGED && !hasPendingMarking) {
-            composeReaderViewModel.requestPage(
-                if (currentPageIndex < 0) Int.MAX_VALUE else currentPageIndex,
-            )
-        }
+        if (!hasPendingMarking) restoreComposePosition(chapter)
         publishComposeImageContext(epubFile, chapterHref)
+        loadBookStyles(chapter.id, epubFile, chapterHref)
         if (epubFile == null && chapterHref == null) {
             resolveComposeImageContext(chapterIndex, chapter)
         }
@@ -2886,11 +2884,7 @@ class NovelReaderActivity :
         )
         val hasPendingMarkingInChapter = composeReaderViewModel.uiState.value.pendingMarkingTarget?.chapterId == chapter.id ||
             composeReaderViewModel.uiState.value.bookmarkRequest?.bookmark?.chapterId == chapter.id
-        if (readerSettings.readingMode == ReadingMode.PAGED && !hasPendingMarkingInChapter) {
-            composeReaderViewModel.requestPage(
-                if (currentPageIndex < 0) Int.MAX_VALUE else currentPageIndex,
-            )
-        }
+        if (!hasPendingMarkingInChapter) restoreComposePosition(chapter)
         resolveComposeImageContext(chapterIndex, chapter)
         finishComposeChapterRender(chapter)
     }
@@ -2964,8 +2958,38 @@ class NovelReaderActivity :
             withContext(Dispatchers.Main) {
                 if (isCurrentChapter(expectedChapterIndex, chapter)) {
                     publishComposeImageContext(epubFile, chapterPath)
+                    loadBookStyles(chapter.id, epubFile, chapterPath)
                 }
             }
+        }
+    }
+
+    /** Reads an EPUB chapter's own styles (its style sheets) for the reader, when book layout is on. */
+    private fun loadBookStyles(chapterId: Long, epubFile: java.io.File?, chapterHref: String?) {
+        if (epubFile == null || chapterHref == null || !readerSettings.useBookStyles) return
+        if (composeReaderViewModel.uiState.value.bookStyles.containsKey(chapterId)) return
+        lifecycleScope.launch(Dispatchers.IO) {
+            val styles = org.skepsun.kototoro.local.epub.EpubChapterStyles.load(epubFile, chapterHref) ?: return@launch
+            withContext(Dispatchers.Main) { composeReaderViewModel.publishBookStyles(chapterId, styles) }
+        }
+    }
+
+    /**
+     * Places a freshly published chapter: at the restored chapter progress when there is one (paged mode picks the page
+     * holding it, scroll mode the block), otherwise paged mode keeps [currentPageIndex] (-1 means the last page).
+     */
+    private fun restoreComposePosition(chapter: ContentChapter) {
+        val progress = desiredProgressRatio
+        if (readerSettings.readingMode == ReadingMode.PAGED) {
+            if (progress != null) {
+                composeReaderViewModel.requestProgress(progress)
+            } else {
+                composeReaderViewModel.requestPage(if (currentPageIndex < 0) Int.MAX_VALUE else currentPageIndex)
+            }
+        } else if (progress != null) {
+            composeReaderViewModel.publishPosition(
+                NovelReadingPosition(chapterId = chapter.id, page = 0, pageCount = 0, chapterProgress = progress),
+            )
         }
     }
 
@@ -3625,7 +3649,7 @@ class NovelReaderActivity :
                 val readerState = ReaderState(
                     chapterId = chapter.id,
                     page = page,
-                    scroll = (chapterProgress * 10000).toInt()
+                    scroll = novelProgressScroll(chapterProgress)
                 )
                 ensureReadingSession(readerState, totalProgress)
 
@@ -3745,7 +3769,7 @@ class NovelReaderActivity :
     private fun computeTotalProgress(state: ReaderState): Float {
         val chapterIndex = chapters.indexOfFirst { it.id == state.chapterId }
         if (chapterIndex < 0 || chapters.isEmpty()) return 0f
-        val chapterProgress = (state.scroll / 10000f).coerceIn(0f, 1f)
+        val chapterProgress = novelScrollProgress(state.scroll.toFloat()) ?: 0f
         return ((chapterIndex + chapterProgress) / chapters.size).coerceIn(0f, 1f)
     }
 
@@ -3913,6 +3937,7 @@ class NovelReaderActivity :
                                 chapterPath = loadResult.chapterHref
                             )
                             publishComposeBoundary(data)
+                            loadBookStyles(chapter.id, loadResult.epubFile, loadResult.chapterHref)
                             if (isPrevious) isLoadingPrevious = false else isLoadingNext = false
                         }
                     } else {

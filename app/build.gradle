@@ -431,6 +431,7 @@ dependencies {
 	// Reader semantics (scenes, geometry, planner contract) — pure JVM module extracted per
 	// improvement plan 2026-09 §8.2; app depends one-way on :reader-core (I1 compile boundary).
 	implementation project(':reader-core')
+	implementation project(':reader-novel')
 	implementation project(':core-ui')
 	// UMA/Usagi plugins are compiled against Tsuki. The host must provide this API at runtime.
 	add(tsukiRuntimeSource.name, libs.tsuki)

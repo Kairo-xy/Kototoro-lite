@@ -741,6 +741,7 @@
     <string name="novel_preview_body_secondary">雨已经停了，街面却还留着一层安静的微光。他抬起头，缓缓吸了一口气，然后向前走去。</string>
     <string name="novel_preview_caption">Live preview</string>
     <string name="novel_first_line_indent">First-line Indent</string>
+    <string name="novel_book_styles">Book Layout (EPUB headings, alignment, emphasis)</string>
     <string name="novel_dual_page_mode">Dual-Page Mode (Landscape/Tablet)</string>
     <string name="novel_fullscreen_mode">Immersive Reading</string>
     <string name="novel_show_reading_status">Show Reading Status</string>

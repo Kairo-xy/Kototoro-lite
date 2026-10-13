@@ -6,42 +6,6 @@ import org.junit.jupiter.api.Test
 class NovelComposePaginationTest {
 
 	@Test
-	fun `line ranges cover every line once`() {
-		val tops = listOf(0f, 20f, 40f, 60f, 80f)
-		val bottoms = listOf(20f, 40f, 60f, 80f, 100f)
-
-		val ranges = splitNovelPageLineRanges(
-			lineCount = tops.size,
-			pageHeightPx = 45,
-			lineTop = tops::get,
-			lineBottom = bottoms::get,
-		)
-
-		assertEquals(listOf(0..1, 2..3, 4..4), ranges)
-		assertEquals(tops.indices.toList(), ranges.flatMap { it.toList() })
-	}
-
-	@Test
-	fun `line taller than a page still advances`() {
-		val ranges = splitNovelPageLineRanges(
-			lineCount = 2,
-			pageHeightPx = 40,
-			lineTop = listOf(0f, 80f)::get,
-			lineBottom = listOf(80f, 100f)::get,
-		)
-
-		assertEquals(listOf(0..0, 1..1), ranges)
-	}
-
-	@Test
-	fun `invalid dimensions produce no pages`() {
-		assertEquals(
-			emptyList<IntRange>(),
-			splitNovelPageLineRanges(3, 0, { 0f }, { 0f }),
-		)
-	}
-
-	@Test
 	fun `page request is clamped inside its target chapter`() {
 		val pages = listOf(
 			NovelPageIdentity(10L, 0),
@@ -73,6 +37,18 @@ class NovelComposePaginationTest {
 		)
 
 		assertEquals(2, target)
+	}
+
+	@Test
+	fun `progress request picks the page holding it in the current pagination`() {
+		val pages = listOf(NovelPageIdentity(9L, 0)) + List(10) { NovelPageIdentity(10L, 1) }
+
+		val target = resolveNovelPageRequest(
+			request = NovelPageRequest(4L, 10L, 1, page = 0, progress = 5f / 9),
+			pages = pages,
+		)
+
+		assertEquals(6, target)
 	}
 
 	@Test

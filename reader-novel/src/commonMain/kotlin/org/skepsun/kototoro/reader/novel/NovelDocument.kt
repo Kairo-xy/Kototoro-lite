@@ -1,14 +1,8 @@
-package org.skepsun.kototoro.reader.novel.compose
+package org.skepsun.kototoro.reader.novel
 
-import org.skepsun.kototoro.reader.novel.NovelChapterTranslation
-import org.skepsun.kototoro.reader.novel.NovelParagraphSplitter
-import org.skepsun.kototoro.reader.novel.NovelTranslationDisplayMode
-import org.skepsun.kototoro.reader.novel.NovelTypography
-import org.skepsun.kototoro.reader.novel.parseNovelImages
+const val NOVEL_PARAGRAPH_INDENT = "　　"
 
-internal const val NOVEL_PARAGRAPH_INDENT = "　　"
-
-internal fun formatNovelParagraphText(
+fun formatNovelParagraphText(
     text: String,
     indentEnabled: Boolean,
     spacingLines: Int,
@@ -20,7 +14,7 @@ internal fun formatNovelParagraphText(
         .map(String::trim)
         .filter(String::isNotEmpty)
         .joinToString(separator) { paragraph ->
-            if (indentEnabled && !NovelTypography.isChapterTitleLine(paragraph)) {
+            if (indentEnabled && !isNovelChapterTitleLine(paragraph)) {
                 NOVEL_PARAGRAPH_INDENT + paragraph.trimStart()
             } else {
                 paragraph
@@ -29,29 +23,33 @@ internal fun formatNovelParagraphText(
 }
 
 /**
- * Immutable, View-independent chapter projection consumed by the Compose novel reader.
+ * Immutable, renderer-independent chapter projection consumed by the novel readers.
  * Image loading and chapter navigation remain separate concerns.
  */
-sealed interface NovelComposeBlock {
+sealed interface NovelDocumentBlock {
+    /** Characters of the converted chapter text the block shows, when known. */
+    val sourceRange: IntRange?
+
     data class Text(
         val key: String,
         val original: String,
         val translation: String?,
         val displayMode: NovelTranslationDisplayMode,
         val inlineImages: Map<String, String>,
-        val sourceRange: IntRange?,
-    ) : NovelComposeBlock
+        override val sourceRange: IntRange?,
+    ) : NovelDocumentBlock
 
     data class Image(
         val key: String,
         val path: String,
-    ) : NovelComposeBlock
+        override val sourceRange: IntRange? = null,
+    ) : NovelDocumentBlock
 }
 
-fun buildNovelComposeDocument(
+fun buildNovelDocument(
     content: String,
     translation: NovelChapterTranslation? = null,
-): List<NovelComposeBlock> {
+): List<NovelDocumentBlock> {
     val parsed = parseNovelImages(content)
     val translationsByOriginal = translation
         ?.paragraphs
@@ -72,11 +70,11 @@ fun buildNovelComposeDocument(
             ?.toIntOrNull()
         if (imageIndex != null) {
             parsed.blockImagePaths.getOrNull(imageIndex)?.let { path ->
-                listOf(NovelComposeBlock.Image(key = "image-$imageIndex", path = path))
+                listOf(NovelDocumentBlock.Image(key = "image-$imageIndex", path = path, sourceRange = sourceRange))
             }.orEmpty()
         } else {
             listOf(
-                NovelComposeBlock.Text(
+                NovelDocumentBlock.Text(
                     key = "text-${paragraph.index}",
                     original = paragraph.originalText,
                     translation = translationsByOriginal[paragraph.originalText],
@@ -93,3 +91,36 @@ fun buildNovelComposeDocument(
 }
 
 private val IMAGE_PLACEHOLDER = Regex("\\[IMAGE_PLACEHOLDER_(\\d+)]")
+
+/**
+ * One block per non-empty line of [novelHtmlToText] output, for readers that position and bookmark by line
+ * (the iOS reader) rather than by blank-line paragraph. A `📷 [图片: src]` line becomes an image block.
+ */
+fun buildNovelLineDocument(text: String): List<NovelDocumentBlock> {
+    val blocks = mutableListOf<NovelDocumentBlock>()
+    var start = 0
+    while (start <= text.length) {
+        val end = text.indexOf('\n', start).let { if (it < 0) text.length else it }
+        val line = text.substring(start, end).trim()
+        if (line.isNotEmpty()) {
+            val image = LINE_IMAGE.matchEntire(line)?.groupValues?.get(1)?.trim()
+            val range = text.indexOf(line, start).let { it until it + line.length }
+            blocks += if (image != null) {
+                NovelDocumentBlock.Image(key = "image-${blocks.size}", path = image, sourceRange = range)
+            } else {
+                NovelDocumentBlock.Text(
+                    key = "text-${blocks.size}",
+                    original = line,
+                    translation = null,
+                    displayMode = NovelTranslationDisplayMode.TRANSLATION_ONLY,
+                    inlineImages = emptyMap(),
+                    sourceRange = range,
+                )
+            }
+        }
+        start = end + 1
+    }
+    return blocks
+}
+
+private val LINE_IMAGE = Regex("""📷\s*\[图片:\s*([^\]]+)]""")
