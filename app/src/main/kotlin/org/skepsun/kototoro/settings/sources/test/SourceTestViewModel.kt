@@ -90,14 +90,21 @@ class SourceTestViewModel @Inject constructor(
 		val sources = JSONArray()
 		_progress.value.results.forEach { result ->
 			val steps = JSONObject()
+			val messages = JSONObject()
 			result.steps.forEach { (step, stepResult) ->
 				steps.put(step.name, stepResult.status.name.lowercase())
+				if (stepResult.message.isNotEmpty() &&
+					(stepResult.status == StepStatus.FAIL || stepResult.status == StepStatus.CLOUDFLARE)
+				) {
+					messages.put(step.name, stepResult.message)
+				}
 			}
 			sources.put(
 				JSONObject()
 					.put("name", result.sourceKey)
 					.put("status", result.overall.name.lowercase())
-					.put("steps", steps),
+					.put("steps", steps)
+					.apply { if (messages.length() > 0) put("messages", messages) },
 			)
 		}
 		return JSONObject()
