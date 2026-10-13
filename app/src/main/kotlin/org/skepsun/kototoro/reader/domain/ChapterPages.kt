@@ -2,6 +2,7 @@ package org.skepsun.kototoro.reader.domain
 
 import androidx.collection.LongSparseArray
 import androidx.collection.contains
+import org.skepsun.kototoro.reader.core.ReaderChapterWindow
 import org.skepsun.kototoro.reader.ui.pager.ReaderPage
 
 class ChapterPages private constructor(private val pages: ArrayDeque<ReaderPage>) : List<ReaderPage> by pages {
@@ -76,15 +77,12 @@ class ChapterPages private constructor(private val pages: ArrayDeque<ReaderPage>
         val currentRange = indices[currentChapterId] ?: return emptyList()
         val previousChapterId = pages.getOrNull(currentRange.first - 1)?.chapterId
         val nextChapterId = pages.getOrNull(currentRange.last + 1)?.chapterId
-        return buildList {
-            if (previousChapterId != null) {
-                addAll(subList(previousChapterId).takeLast(adjacentPageCount))
-            }
-            addAll(pages.subList(currentRange.first, currentRange.last + 1))
-            if (nextChapterId != null) {
-                addAll(subList(nextChapterId).take(adjacentPageCount))
-            }
-        }
+        return ReaderChapterWindow.pages(
+            previousChapterId?.let(::subList).orEmpty(),
+            pages.subList(currentRange.first, currentRange.last + 1),
+            nextChapterId?.let(::subList).orEmpty(),
+            adjacentPageCount,
+        )
     }
 
     operator fun contains(chapterId: Long) = chapterId in indices
