@@ -349,7 +349,6 @@ struct SourcesView: View {
             Group {
                 if layout == .grid { grid } else { list }
             }
-            .rootPageTopEdge()
             .overlay {
                 if model.isLoading && model.sources.isEmpty { ProgressView("正在读取源…") }
             }

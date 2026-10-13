@@ -77,10 +77,10 @@ final class LibraryPersistenceTests: XCTestCase {
         XCTAssertTrue(chip(first, in: app).exists)
     }
 
-    /// The library has only its own search (no inherited global field under the title), the categories stay pinned
-    /// while the works scroll, and swiping sideways over the works moves between categories.
+    /// The library has only its own search (no inherited global field under the title), the categories scroll with
+    /// the works, and swiping sideways over the works moves between categories.
     @MainActor
-    func testCategoriesStayPinnedAndSwipeBetweenCategories() {
+    func testCategoriesScrollWithWorksAndSwipeBetweenCategories() {
         continueAfterFailure = false
         let app = XCUIApplication(); app.launch()
         let addButton = app.buttons["category.add"]
@@ -100,10 +100,13 @@ final class LibraryPersistenceTests: XCTestCase {
         XCTAssertTrue(all.waitForExistence(timeout: 10))
         if !all.isSelected { all.tap() }
         XCTAssertTrue(all.isSelected)
-        let area = app.scrollViews.firstMatch
+        // The categories are the page's first row: they scroll away with the works and come back at the top.
+        let area = app.windows.firstMatch
         area.swipeUp()
-        XCTAssertTrue(all.isHittable, "Categories should stay pinned while the works scroll: \(app.debugDescription)")
+        XCTAssertFalse(all.isHittable, "Categories should scroll away with the works: \(app.debugDescription)")
         area.swipeDown()
+        expectation(for: NSPredicate(format: "hittable == true"), evaluatedWith: all)
+        waitForExpectations(timeout: 5)
         // From 全部 a left swipe selects the first category, a right swipe returns.
         area.coordinate(withNormalizedOffset: CGVector(dx: 0.85, dy: 0.6))
             .press(forDuration: 0.05, thenDragTo: area.coordinate(withNormalizedOffset: CGVector(dx: 0.15, dy: 0.6)))

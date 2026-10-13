@@ -49,7 +49,6 @@ struct LibraryRecordsView: View {
                 }
                 .padding(.bottom, 24)
             }
-            .rootPageTopEdge()
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle(selection == 0 ? "历史" : "更新")
             .spaceSubtitle(spacesEnabled ? ContentSpace.subtitle(space) : "")

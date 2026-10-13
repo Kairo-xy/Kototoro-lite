@@ -58,6 +58,11 @@ struct LibraryView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 14) {
+                    // The categories are the first row of the page and scroll away with the works, as Mail and Music
+                    // place theirs. A top `safeAreaBar` also moves the top inset, and the navigation bar's large title
+                    // and search drawer then expand and collapse against it at the end of a fling: the page shook and
+                    // the search field never came out.
+                    if library.schemaVersion != nil { categoryBar }
                     if !spacesEnabled && ContentKindPicker.isShown(availableKinds) {
                         ContentKindPicker(selection: $pageKind, available: availableKinds).padding(.horizontal)
                     }
@@ -72,12 +77,6 @@ struct LibraryView: View {
                 .padding(.top, 8)
                 .padding(.bottom, 24)
             }
-            // The categories are the system bar under the navigation bar (Apple's `safeAreaBar` pattern): they stay
-            // at the top while the works scroll.
-            .safeAreaBar(edge: .top) {
-                if library.schemaVersion != nil { categoryBar.padding(.vertical, 6) }
-            }
-            .rootPageTopEdge()
             // Swiping sideways over the works moves to the previous / next category, like the chips do.
             .gesture(HorizontalSwipeGesture(onEnded: swipe))
             .background(Color(uiColor: .systemGroupedBackground))

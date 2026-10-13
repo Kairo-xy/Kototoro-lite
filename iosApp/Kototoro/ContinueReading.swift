@@ -178,12 +178,4 @@ extension View {
     func pageSearch(text: Binding<String>, prompt: String) -> some View {
         searchable(text: text, placement: .navigationBarDrawer(displayMode: .automatic), prompt: prompt)
     }
-
-    /// The root pages (library, browse, records) run their content right up to the top bars without the scroll
-    /// edge blur. That blur also covered a large title resting over a top `safeAreaBar` (FB21613303); without it the
-    /// library keeps its large title like the other root pages. Applied to the page's own scroll view only, so
-    /// pushed pages keep the system effect.
-    func rootPageTopEdge() -> some View {
-        scrollEdgeEffectHidden(true, for: .top)
-    }
 }
