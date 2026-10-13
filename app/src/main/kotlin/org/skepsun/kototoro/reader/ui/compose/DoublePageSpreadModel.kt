@@ -1,9 +1,7 @@
 package org.skepsun.kototoro.reader.ui.compose
 
-import org.skepsun.kototoro.reader.core.PageGeometryHint
-import org.skepsun.kototoro.reader.core.PageSegment
-import org.skepsun.kototoro.reader.core.WidePagePolicy
 import org.skepsun.kototoro.reader.ui.pager.ReaderPage
+import org.skepsun.kototoro.reader.ui.pager.ReaderPageSplit
 
 internal data class DoublePageDisplayItem(
     val page: ReaderPage?,
@@ -67,17 +65,9 @@ internal class DoublePageSpreadModel private constructor(
             fun isWide(pos: Int): Boolean {
                 val item = displayItems.getOrNull(pos) ?: return false
                 val page = item.page ?: return false
-                val hint = page.geometryHint ?: return false
-                
-                val ratio = when (hint) {
-                    is PageGeometryHint.Exact -> if (hint.height > 0) hint.width.toFloat() / hint.height.toFloat() else 1f
-                    is PageGeometryHint.AspectRatio -> hint.ratio
-                    is PageGeometryHint.Estimated -> hint.ratio
-                }
-                
-                if (ratio > 1.15f) return true
-                if (page.segment == PageSegment.FULL && WidePagePolicy.isWidePage(hint)) return true
-                return false
+                // If a page is explicitly split or marked, handle accordingly; 
+                // otherwise treat normal single pages as standard width, and split/wide items independently.
+                return page.split != ReaderPageSplit.NONE
             }
 
             val spreads = buildList {
