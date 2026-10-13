@@ -34,25 +34,8 @@ jobs:
     - name: Generate Changelog
       id: changelog
       run: |
-        CURRENT_TAG="${{ env.TAG_NAME }}"
-        echo "Current Tag: $CURRENT_TAG"
-        
-        # Find the most recent tag before the current one
-        PREVIOUS_TAG=$(git describe --tags --abbrev=0 --exclude="$CURRENT_TAG" 2>/dev/null || echo "")
-        echo "Previous Tag: $PREVIOUS_TAG"
-        
-        if [ -z "$PREVIOUS_TAG" ]; then
-          echo "No previous tag found. Getting all logs."
-          CHANGELOG=$(git log --pretty=format:"- %s (%h)" --no-merges)
-        else
-          echo "Getting logs between $PREVIOUS_TAG and $CURRENT_TAG"
-          CHANGELOG=$(git log --pretty=format:"- %s (%h)" "$PREVIOUS_TAG..$CURRENT_TAG" --no-merges)
-        fi
-        
-        echo "changelog<<EOF" >> $GITHUB_OUTPUT
-        echo "$CHANGELOG" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT
-        echo "previous_tag=$PREVIOUS_TAG" >> $GITHUB_OUTPUT
+        echo "changelog=Custom build" >> $GITHUB_OUTPUT
+        echo "previous_tag=" >> $GITHUB_OUTPUT
     
     - name: Set up JDK
       uses: actions/setup-java@v4
