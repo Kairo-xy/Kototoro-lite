@@ -7,32 +7,12 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		FA0000000000000000000099 /* UITestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000099 /* UITestSupport.swift */; };
-		FA0000000000000000000006 /* ContinueReading.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000005 /* ContinueReading.swift */; };
-		FA0000000000000000000008 /* SourceWebBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000008 /* SourceWebBrowser.swift */; };
-		FA0000000000000000000007 /* SourceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000007 /* SourceSettingsView.swift */; };
-		FA0000000000000000000005 /* ReaderPageTurn.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000004 /* ReaderPageTurn.swift */; };
-		FA0000000000000000000001 /* ImageLoadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000001 /* ImageLoadPolicy.swift */; };
-		FA0000000000000000000002 /* ImageLoadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000001 /* ImageLoadPolicy.swift */; };
-		FA0000000000000000000003 /* ImageLoadPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000002 /* ImageLoadPolicyTests.swift */; };
-		F80000000000000000000007 /* SourceFilterSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000008 /* SourceFilterSheet.swift */; };
-		F80000000000000000000009 /* DetailsPanorama.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8000000000000000000000A /* DetailsPanorama.swift */; };
-		F8000000000000000000000D /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8000000000000000000000E /* LibraryView.swift */; };
-		F8000000000000000000000F /* SourceManagement.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000010 /* SourceManagement.swift */; };
-		F80000000000000000000011 /* GlobalSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000012 /* GlobalSearchView.swift */; };
-		F8000000000000000000000B /* ContentCollection.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8000000000000000000000C /* ContentCollection.swift */; };
-		F80000000000000000000005 /* SourceIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000006 /* SourceIcon.swift */; };
-		F80000000000000000000003 /* BackupFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000004 /* BackupFlowTests.swift */; };
-		F80000000000000000000020 /* LocalImportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000021 /* LocalImportTests.swift */; };
-		F80000000000000000000001 /* BackupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000002 /* BackupView.swift */; };
 		A00000000000000000000001 /* KototoroApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000011 /* KototoroApp.swift */; };
 		A00000000000000000000002 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000012 /* ContentView.swift */; };
 		A00000000000000000000003 /* LibraryModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000013 /* LibraryModel.swift */; };
 		A00000000000000000000004 /* LibraryPersistenceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000014 /* LibraryPersistenceTests.swift */; };
 		B00000000000000000000001 /* Native/KototoroJVM.cpp in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000011 /* Native/KototoroJVM.cpp */; };
-		F90000000000000000000030 /* Native/KototoroNative.mm in Sources */ = {isa = PBXBuildFile; fileRef = F90000000000000000000031 /* Native/KototoroNative.mm */; };
 		B00000000000000000000002 /* NativeSourceTransport.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000012 /* NativeSourceTransport.swift */; };
-		F80000000000000000000022 /* ExtensionWebKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000023 /* ExtensionWebKit.swift */; };
 		B00000000000000000000003 /* SourcesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000013 /* SourcesView.swift */; };
 		B00000000000000000000004 /* SourceRuntimeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B00000000000000000000014 /* SourceRuntimeTests.swift */; };
 		C00000000000000000000001 /* SourceDetailsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000011 /* SourceDetailsView.swift */; };
@@ -65,6 +45,26 @@
 		F40000000000000000000004 /* ExtensionPresentationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000003 /* ExtensionPresentationTests.swift */; };
 		F40000000000000000000005 /* RepositoryManagementTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F50000000000000000000004 /* RepositoryManagementTests.swift */; };
 		F60000000000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = F70000000000000000000001 /* Assets.xcassets */; };
+		F80000000000000000000001 /* BackupView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000002 /* BackupView.swift */; };
+		F80000000000000000000003 /* BackupFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000004 /* BackupFlowTests.swift */; };
+		F80000000000000000000005 /* SourceIcon.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000006 /* SourceIcon.swift */; };
+		F80000000000000000000007 /* SourceFilterSheet.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000008 /* SourceFilterSheet.swift */; };
+		F80000000000000000000009 /* DetailsPanorama.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8000000000000000000000A /* DetailsPanorama.swift */; };
+		F8000000000000000000000B /* ContentCollection.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8000000000000000000000C /* ContentCollection.swift */; };
+		F8000000000000000000000D /* LibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F8000000000000000000000E /* LibraryView.swift */; };
+		F8000000000000000000000F /* SourceManagement.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000010 /* SourceManagement.swift */; };
+		F80000000000000000000011 /* GlobalSearchView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000012 /* GlobalSearchView.swift */; };
+		F80000000000000000000020 /* LocalImportTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000021 /* LocalImportTests.swift */; };
+		F80000000000000000000022 /* ExtensionWebKit.swift in Sources */ = {isa = PBXBuildFile; fileRef = F80000000000000000000023 /* ExtensionWebKit.swift */; };
+		F90000000000000000000030 /* Native/KototoroNative.mm in Sources */ = {isa = PBXBuildFile; fileRef = F90000000000000000000031 /* Native/KototoroNative.mm */; };
+		FA0000000000000000000001 /* ImageLoadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000001 /* ImageLoadPolicy.swift */; };
+		FA0000000000000000000002 /* ImageLoadPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000001 /* ImageLoadPolicy.swift */; };
+		FA0000000000000000000003 /* ImageLoadPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000002 /* ImageLoadPolicyTests.swift */; };
+		FA0000000000000000000005 /* ReaderPageTurn.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000004 /* ReaderPageTurn.swift */; };
+		FA0000000000000000000006 /* ContinueReading.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000005 /* ContinueReading.swift */; };
+		FA0000000000000000000007 /* SourceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000007 /* SourceSettingsView.swift */; };
+		FA0000000000000000000008 /* SourceWebBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000008 /* SourceWebBrowser.swift */; };
+		FA0000000000000000000099 /* UITestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB0000000000000000000099 /* UITestSupport.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -78,23 +78,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		FB0000000000000000000099 /* UITestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestSupport.swift; sourceTree = "<group>"; };
-		FB0000000000000000000005 /* ContinueReading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinueReading.swift; sourceTree = "<group>"; };
-		FB0000000000000000000008 /* SourceWebBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceWebBrowser.swift; sourceTree = "<group>"; };
-		FB0000000000000000000007 /* SourceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceSettingsView.swift; sourceTree = "<group>"; };
-		FB0000000000000000000004 /* ReaderPageTurn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderPageTurn.swift; sourceTree = "<group>"; };
-		FB0000000000000000000001 /* ImageLoadPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoadPolicy.swift; sourceTree = "<group>"; };
-		FB0000000000000000000002 /* ImageLoadPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoadPolicyTests.swift; sourceTree = "<group>"; };
-		F80000000000000000000008 /* SourceFilterSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceFilterSheet.swift; sourceTree = "<group>"; };
-		F8000000000000000000000A /* DetailsPanorama.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailsPanorama.swift; sourceTree = "<group>"; };
-		F8000000000000000000000E /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
-		F80000000000000000000010 /* SourceManagement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceManagement.swift; sourceTree = "<group>"; };
-		F80000000000000000000012 /* GlobalSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalSearchView.swift; sourceTree = "<group>"; };
-		F8000000000000000000000C /* ContentCollection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentCollection.swift; sourceTree = "<group>"; };
-		F80000000000000000000006 /* SourceIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceIcon.swift; sourceTree = "<group>"; };
-		F80000000000000000000004 /* BackupFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupFlowTests.swift; sourceTree = "<group>"; };
-		F80000000000000000000021 /* LocalImportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalImportTests.swift; sourceTree = "<group>"; };
-		F80000000000000000000002 /* BackupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupView.swift; sourceTree = "<group>"; };
 		A00000000000000000000011 /* KototoroApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = KototoroApp.swift; sourceTree = "<group>"; };
 		A00000000000000000000012 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A00000000000000000000013 /* LibraryModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryModel.swift; sourceTree = "<group>"; };
@@ -102,9 +85,7 @@
 		A00000000000000000000015 /* Kototoro.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; path = Kototoro.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000016 /* KototoroUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; path = KototoroUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B00000000000000000000011 /* Native/KototoroJVM.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = Native/KototoroJVM.cpp; sourceTree = SOURCE_ROOT; };
-		F90000000000000000000031 /* Native/KototoroNative.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = Native/KototoroNative.mm; sourceTree = SOURCE_ROOT; };
 		B00000000000000000000012 /* NativeSourceTransport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NativeSourceTransport.swift; sourceTree = "<group>"; };
-		F80000000000000000000023 /* ExtensionWebKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionWebKit.swift; sourceTree = "<group>"; };
 		B00000000000000000000013 /* SourcesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourcesView.swift; sourceTree = "<group>"; };
 		B00000000000000000000014 /* SourceRuntimeTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceRuntimeTests.swift; sourceTree = "<group>"; };
 		C00000000000000000000011 /* SourceDetailsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceDetailsView.swift; sourceTree = "<group>"; };
@@ -134,6 +115,25 @@
 		F50000000000000000000003 /* ExtensionPresentationTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionPresentationTests.swift; sourceTree = "<group>"; };
 		F50000000000000000000004 /* RepositoryManagementTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RepositoryManagementTests.swift; sourceTree = "<group>"; };
 		F70000000000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		F80000000000000000000002 /* BackupView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupView.swift; sourceTree = "<group>"; };
+		F80000000000000000000004 /* BackupFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BackupFlowTests.swift; sourceTree = "<group>"; };
+		F80000000000000000000006 /* SourceIcon.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceIcon.swift; sourceTree = "<group>"; };
+		F80000000000000000000008 /* SourceFilterSheet.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceFilterSheet.swift; sourceTree = "<group>"; };
+		F8000000000000000000000A /* DetailsPanorama.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailsPanorama.swift; sourceTree = "<group>"; };
+		F8000000000000000000000C /* ContentCollection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentCollection.swift; sourceTree = "<group>"; };
+		F8000000000000000000000E /* LibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryView.swift; sourceTree = "<group>"; };
+		F80000000000000000000010 /* SourceManagement.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceManagement.swift; sourceTree = "<group>"; };
+		F80000000000000000000012 /* GlobalSearchView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GlobalSearchView.swift; sourceTree = "<group>"; };
+		F80000000000000000000021 /* LocalImportTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalImportTests.swift; sourceTree = "<group>"; };
+		F80000000000000000000023 /* ExtensionWebKit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExtensionWebKit.swift; sourceTree = "<group>"; };
+		F90000000000000000000031 /* Native/KototoroNative.mm */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.objcpp; path = Native/KototoroNative.mm; sourceTree = SOURCE_ROOT; };
+		FB0000000000000000000001 /* ImageLoadPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoadPolicy.swift; sourceTree = "<group>"; };
+		FB0000000000000000000002 /* ImageLoadPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ImageLoadPolicyTests.swift; sourceTree = "<group>"; };
+		FB0000000000000000000004 /* ReaderPageTurn.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderPageTurn.swift; sourceTree = "<group>"; };
+		FB0000000000000000000005 /* ContinueReading.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContinueReading.swift; sourceTree = "<group>"; };
+		FB0000000000000000000007 /* SourceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceSettingsView.swift; sourceTree = "<group>"; };
+		FB0000000000000000000008 /* SourceWebBrowser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceWebBrowser.swift; sourceTree = "<group>"; };
+		FB0000000000000000000099 /* UITestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UITestSupport.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -503,11 +503,13 @@
 				);
 				INFOPLIST_FILE = Kototoro/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Kototoro;
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = NO;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				KOTOTORO_JVM = 0;
 				MARKETING_VERSION = 0.1.0;
+				ONLY_ACTIVE_ARCH = YES;
 				OTHER_CPLUSPLUSFLAGS = (
 					"$(inherited)",
 					"-DKTR_HAS_JVM=$(KOTOTORO_JVM)",
@@ -554,11 +556,13 @@
 				);
 				INFOPLIST_FILE = Kototoro/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Kototoro;
+				INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace = NO;
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
 				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
 				KOTOTORO_JVM = 0;
 				MARKETING_VERSION = 0.1.0;
+				ONLY_ACTIVE_ARCH = NO;
 				OTHER_CPLUSPLUSFLAGS = (
 					"$(inherited)",
 					"-DKTR_HAS_JVM=$(KOTOTORO_JVM)",
