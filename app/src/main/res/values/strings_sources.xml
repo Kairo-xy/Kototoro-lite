@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources xmlns:tools="http://schemas.android.com/tools">
+<resources>
     <string name="source_groups_title">Extension Groups</string>
     <string name="source_groups_save_current">Save current state as group</string>
     <string name="source_groups_import">Import</string>
@@ -75,4 +75,7 @@
     <string name="source_test_export">Export results</string>
     <string name="source_lock_locked">Locked, tap to unlock</string>
     <string name="source_lock_unlocked">Lock current state</string>
+    <string name="extension_file_delete_failed">Could not delete %1$s.</string>
+    <string name="source_groups_export_lost">The export target was lost. Please try exporting again.</string>
+    <string name="extension_repo_update_failed">Update failed: %1$s</string>
 </resources>
