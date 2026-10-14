@@ -248,9 +248,11 @@ fun UnifiedSourcesRoute(
     }
 
     fun confirmSetFilteredSourcesEnabled(enabled: Boolean) {
+        // Locked sources ignore bulk enable/disable, so they are neither counted nor confirmed.
         val sourceIds = (state as? UnifiedSourcesUiState.Ready)
             ?.sources
             .orEmpty()
+            .filter { it.lock == null }
             .mapTo(LinkedHashSet()) { it.id }
         if (sourceIds.isNotEmpty()) {
             activeDialog = UnifiedSourcesDialogState.SetFilteredSourcesEnabled(sourceIds, enabled)
