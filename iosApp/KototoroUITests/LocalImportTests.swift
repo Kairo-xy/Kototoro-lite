@@ -2,7 +2,7 @@ import XCTest
 import UIKit
 
 /// Local works through the document picker: `Scripts/stage-picker-fixtures.py` places a two-page CBZ and a GB18030
-/// TXT novel in "On My iPhone"; both are imported from the 本地作品 sources and open in the readers.
+/// TXT novel and H.264/AAC video in "On My iPhone"; imports open in the readers or native player.
 final class LocalImportTests: XCTestCase {
     private var app: XCUIApplication!
 
@@ -738,9 +738,69 @@ final class LocalImportTests: XCTestCase {
         attach("本地小说阅读")
     }
 
-    private func importFile(source name: String, file: String, reuse: Bool = false) {
+    @MainActor
+    func testImportedVideoPlaysAndReimportAfterRestartKeepsItsPosition() throws {
+        importFile(source: "LOCAL_VIDEO", file: "fixture_video")
+        openFirstChapter(title: "fixture_video")
+        XCTAssertTrue(app.staticTexts["player.position"].waitForExistence(timeout: 30), app.debugDescription)
+        let playing = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in self.playedSeconds >= 1 }, object: nil)
+        wait(for: [playing], timeout: 20)
+        let progress = app.sliders["player.scrubber"]
+        showVideoControls()
+        XCTAssertTrue(progress.waitForExistence(timeout: 10), app.debugDescription)
+        progress.adjust(toNormalizedSliderPosition: 0.35)
+        let advanced = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.playedSeconds >= 10
+        }, object: nil)
+        wait(for: [advanced], timeout: 15)
+        XCTAssertFalse(app.staticTexts["player.error"].exists)
+        let saved = playedSeconds
+        attach("本地视频实际播放进度")
+        showVideoControls()
+        app.buttons["player.close"].tap()
+        XCTAssertTrue(app.buttons["details.resume"].waitForExistence(timeout: 15), app.debugDescription)
+        app.terminate(); app.launch()
+        // Import again through the picker, proving that duplicate imports keep the original work/history identity.
+        importFile(source: "LOCAL_VIDEO", file: "fixture_video")
+        let resume = app.buttons["details.resume"]
+        XCTAssertTrue(resume.waitForExistence(timeout: 15), app.debugDescription)
+        resume.tap()
+        let restored = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            self.playedSeconds >= saved && self.playedSeconds < saved + 8
+        }, object: nil)
+        wait(for: [restored], timeout: 15)
+        XCTAssertFalse(app.staticTexts["player.error"].exists)
+        attach("本地视频重启与重复导入续播")
+        showVideoControls()
+        app.buttons["player.close"].tap()
+    }
+
+    @MainActor
+    func testBrokenVideoIsRejectedBeforeItEntersTheLocalLibrary() throws {
+        importFile(source: "LOCAL_VIDEO", file: "fixture_broken_video", expectImport: false)
+        XCTAssertTrue(app.alerts.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "系统播放器无法读取此视频"))
+            .firstMatch.waitForExistence(timeout: 15), app.debugDescription)
+        attach("损坏视频导入被拒绝")
+        app.alerts.buttons["好"].tap()
+        XCTAssertFalse(app.descendants(matching: .any).matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "source.content.", "fixture_broken_video"
+        )).firstMatch.exists)
+    }
+
+    private var playedSeconds: Int {
+        Int(app.staticTexts["player.position"].label.replacingOccurrences(of: "已播放 ", with: "")
+            .replacingOccurrences(of: " 秒", with: "")) ?? -1
+    }
+
+    private func showVideoControls() {
+        if !app.buttons["player.close"].isHittable {
+            app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.2)).tap()
+        }
+    }
+
+    private func importFile(source name: String, file: String, reuse: Bool = false, expectImport: Bool = true) {
         app.tabBars.buttons["浏览"].tap()
-        let kind = name == "LOCAL_NOVEL" ? "NOVEL" : "MANGA"
+        let kind = name == "LOCAL_NOVEL" ? "NOVEL" : name == "LOCAL_VIDEO" ? "VIDEO" : "MANGA"
         if app.navigationBars.buttons["关闭"].exists { app.navigationBars.buttons["关闭"].tap() }
         let space = app.buttons["space.menu"]
         if space.waitForExistence(timeout: 3) {
@@ -749,7 +809,7 @@ final class LocalImportTests: XCTestCase {
             XCTAssertTrue(choice.waitForExistence(timeout: 5))
             choice.tap()
         } else if app.segmentedControls["contentKind"].exists {
-            app.segmentedControls["contentKind"].buttons[kind == "NOVEL" ? "小说" : "漫画"].tap()
+            app.segmentedControls["contentKind"].buttons[kind == "NOVEL" ? "小说" : kind == "VIDEO" ? "视频" : "漫画"].tap()
         }
         let field = app.pageSearchField()
         XCTAssertTrue(field.waitForExistence(timeout: 10))
@@ -781,7 +841,6 @@ final class LocalImportTests: XCTestCase {
             let location = app.cells.matching(NSPredicate(format: "label CONTAINS %@", title)).firstMatch
             if location.exists && location.isHittable { location.tap(); break }
         }
-        let picked = app.descendants(matching: .any).matching(NSPredicate(format: "label BEGINSWITH %@", file)).firstMatch
         let pickerList: XCUIElement
         if app.collectionViews.firstMatch.exists { pickerList = app.collectionViews.firstMatch }
         else if app.tables.firstMatch.exists { pickerList = app.tables.firstMatch }
@@ -793,6 +852,9 @@ final class LocalImportTests: XCTestCase {
             XCTAssertNotNil(visibleList, app.debugDescription)
             pickerList = visibleList ?? app.scrollViews.firstMatch
         }
+        // A previously imported work remains in the app beneath the picker and can have the same label.
+        // Restrict selection to the document provider, so reimport tests actually choose the requested file.
+        let picked = pickerList.cells.matching(NSPredicate(format: "label BEGINSWITH %@", file)).firstMatch
         if !picked.waitForExistence(timeout: 3) {
             attach("新夹具所在文件目录")
             for _ in 0..<6 {
@@ -810,11 +872,20 @@ final class LocalImportTests: XCTestCase {
         for _ in 0..<6 where picked.frame.midY > app.frame.maxY - 90 || picked.frame.midY < 110 {
             if picked.frame.midY > app.frame.maxY - 90 { pickerList.swipeUp() } else { pickerList.swipeDown() }
         }
-        picked.tap()
+        // The document provider may retain an earlier selection. Use the selectable cell, rather than its text
+        // preview, and keep an already selected requested file selected.
+        for cell in pickerList.cells.allElementsBoundByIndex where cell.isSelected && cell.label != picked.label {
+            if cell.isHittable { cell.tap() }
+        }
+        if !picked.isSelected { picked.tap() }
         // Multiple selection keeps the picker open until 打开 is pressed.
         for label in ["打开", "Open"] where app.buttons[label].waitForExistence(timeout: 3) {
-            app.buttons[label].tap(); break
+            let open = app.buttons[label]
+            XCTAssertTrue(open.isEnabled, app.debugDescription)
+            open.tap(); break
         }
+        XCTAssertTrue(pickerList.waitForNonExistence(timeout: 15), app.debugDescription)
+        if !expectImport { return }
         XCTAssertTrue(item.waitForExistence(timeout: 30), app.debugDescription)
         attach("\(name) 导入后")
         item.tap()

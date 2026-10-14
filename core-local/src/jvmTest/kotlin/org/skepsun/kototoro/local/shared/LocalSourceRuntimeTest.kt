@@ -231,4 +231,70 @@ class LocalSourceRuntimeTest {
         assertTrue(runtime.getList("LOCAL", 0, null, null).isEmpty())
         assertTrue(File(dir, "store/items").listFiles().orEmpty().isEmpty())
     }
+
+    @Test
+    fun videoIsCopiedAndReopensWithStableChaptersAndAnEncodedFileUrl() = runTest {
+        val file = File(dir, "动画 #1.MP4").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        val runtime = runtime()
+        val content = runtime.import(file.toOkioPath(), file.name)
+        assertEquals("LOCAL_VIDEO", content.source.name)
+        assertNull(content.coverUrl)
+        val chapter = content.chapters!!.single()
+        val pages = runtime.getPages(chapter, null)
+        assertEquals(1, pages.size)
+        assertEquals(content.source, pages.single().source)
+        val stored = File(java.net.URI(pages.single().url))
+        assertTrue(stored.readBytes().contentEquals(file.readBytes()))
+        assertTrue(stored.canonicalPath.startsWith(File(dir, "store").canonicalPath))
+        file.delete() // Playback is independent of the document provider's original file.
+        val reopened = runtime().getDetails(content, SourceDetailsFetchMode.ALLOW_CACHE)
+        assertEquals(chapter.id, reopened.chapters!!.single().id)
+        assertEquals(pages, runtime().getPages(reopened.chapters!!.single(), null))
+        assertTrue(runtime.describe("LOCAL_VIDEO").isCoverFetchingSupported.not())
+        assertEquals(listOf(content.id), runtime.getList("LOCAL_VIDEO", 0, null, null).map { it.id })
+        runtime.remove(content.id)
+        assertFalse(stored.exists())
+    }
+
+    @Test
+    fun reimportKeepsIdentityAndEqualSizedDifferentFilesDoNotOverwriteEachOther() = runTest {
+        val file = File(dir, "video.mp4").apply { writeBytes(byteArrayOf(1, 2, 3, 4)) }
+        val runtime = runtime()
+        val first = runtime.import(file.toOkioPath(), file.name)
+        val again = runtime.import(file.toOkioPath(), file.name)
+        assertEquals(first.id, again.id)
+        assertEquals(first.chapters, again.chapters)
+        file.writeBytes(byteArrayOf(4, 3, 2, 1))
+        val changed = runtime.import(file.toOkioPath(), file.name)
+        assertTrue(first.id != changed.id)
+        assertEquals(2, runtime.getList("LOCAL_VIDEO", 0, null, null).size)
+        val old = File(java.net.URI(runtime.getPages(first.chapters!!.single(), null).single().url))
+        assertTrue(old.readBytes().contentEquals(byteArrayOf(1, 2, 3, 4)))
+    }
+
+    @Test
+    fun failedReimportPreservesThePreviouslyReadableWork() = runTest {
+        val file = File(dir, "novel.txt").apply { writeText("第一章\n原来的正文") }
+        val runtime = runtime()
+        val content = runtime.import(file.toOkioPath(), file.name)
+        file.writeText("")
+        assertThrows(IllegalArgumentException::class.java) {
+            kotlinx.coroutines.runBlocking { runtime.import(file.toOkioPath(), file.name) }
+        }
+        val reopened = runtime().getDetails(content, SourceDetailsFetchMode.ALLOW_CACHE)
+        assertTrue(runtime().getChapterContent(reopened.chapters!!.single(), null).html.contains("原来的正文"))
+    }
+
+    @Test
+    fun emptyVideoAndStandalonePlaylistsLeaveNoImportedFiles() = runTest {
+        val runtime = runtime()
+        for ((name, text) in listOf("empty.mp4" to "", "playlist.M3U8" to "#EXTM3U\nsegment.ts")) {
+            val file = File(dir, name).apply { writeText(text) }
+            assertThrows(IllegalArgumentException::class.java) {
+                kotlinx.coroutines.runBlocking { runtime.import(file.toOkioPath(), name) }
+            }
+        }
+        assertTrue(runtime.getList("LOCAL_VIDEO", 0, null, null).isEmpty())
+        assertTrue(File(dir, "store/items").listFiles().orEmpty().isEmpty())
+    }
 }

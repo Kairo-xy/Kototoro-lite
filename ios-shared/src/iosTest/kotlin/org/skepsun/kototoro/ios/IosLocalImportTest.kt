@@ -25,7 +25,7 @@ class IosLocalImportTest {
         try {
             val sources = IosSources(null, null, "$dir/local", "$dir/images")
             val catalog = sources.catalog().sources
-            assertEquals(listOf("LOCAL", "LOCAL_NOVEL"), catalog.map { it.name })
+            assertEquals(listOf("LOCAL", "LOCAL_NOVEL", "LOCAL_VIDEO"), catalog.map { it.name })
             assertTrue(catalog.all { it.ecosystem == "LOCAL" })
 
             val png = byteArrayOf(0x89.toByte(), 0x50, 0x4E, 0x47, 1, 2, 3)
@@ -54,5 +54,42 @@ class IosLocalImportTest {
             sources.removeLocal(manga)
             assertTrue(sources.page("LOCAL", 0, 0, null, null).isEmpty())
         } finally { NSFileManager.defaultManager.removeItemAtPath(dir, null) }
+    }
+
+    @Test
+    fun importedVideoReopensWithItsLibraryPositionAndFileUrl() = runBlocking {
+        val dir = NSTemporaryDirectory() + NSUUID().UUIDString
+        FileSystem.SYSTEM.createDirectories(dir.toPath())
+        try {
+            FileSystem.SYSTEM.write("$dir/动画 #1.mp4".toPath()) { writeUtf8("video fixture; codecs validated by Swift") }
+            val sources = IosSources(null, null, "$dir/local", "$dir/images")
+            val imported = sources.importLocal("$dir/动画 #1.mp4", "动画 #1.mp4")
+            val details = sources.details(imported)
+            assertEquals("LOCAL_VIDEO", details.sourceName)
+            assertEquals("VIDEO", details.contentType)
+            val chapter = details.chapters.single()
+            val library = IosLibrary("$dir/library.db")
+            try {
+                library.setFavourite(details, true)
+                library.recordPosition(details, chapter, 200, 1000, 12f)
+            } finally { library.close() }
+            val again = sources.importLocal("$dir/动画 #1.mp4", "动画 #1.mp4")
+            assertEquals(details.id, again.id)
+            val reopened = IosSources(null, null, "$dir/local", "$dir/images").details(again)
+            assertEquals(chapter.id, reopened.chapters.single().id)
+            val reopenedLibrary = IosLibrary("$dir/library.db")
+            try {
+                reopenedLibrary.updateSources(sources.catalog().sources)
+                assertEquals(12f, reopenedLibrary.position(reopened)?.scroll)
+                assertEquals(details.id, reopenedLibrary.favourites().single().content.id)
+                assertEquals("VIDEO", reopenedLibrary.history().single().content.contentType)
+            } finally { reopenedLibrary.close() }
+            val page = sources.pages(chapter).single()
+            assertTrue(page.url.startsWith("file://"))
+            assertTrue(page.url.endsWith("/book.mp4"))
+            assertEquals(listOf("动画 #1"), sources.page("LOCAL_VIDEO", 0, 0, null, null).map { it.title })
+            sources.removeLocal(details)
+            assertTrue(sources.page("LOCAL_VIDEO", 0, 0, null, null).isEmpty())
+        } finally { FileSystem.SYSTEM.deleteRecursively(dir.toPath()) }
     }
 }

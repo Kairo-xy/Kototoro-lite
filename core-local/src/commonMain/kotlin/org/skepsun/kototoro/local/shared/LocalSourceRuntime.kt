@@ -10,7 +10,10 @@ import kotlinx.serialization.json.Json
 import okio.ByteString.Companion.encodeUtf8
 import okio.ByteString.Companion.toByteString
 import okio.FileSystem
+import okio.HashingSource
 import okio.Path
+import okio.buffer
+import okio.use
 import org.skepsun.kototoro.core.source.SourceChapter
 import org.skepsun.kototoro.core.source.SourceChapterContent
 import org.skepsun.kototoro.core.source.SourceContent
@@ -63,10 +66,11 @@ class LocalSourceRuntime(
     private val reader = LocalBookReader(fileSystem, decodeLegacyText)
     private val json = Json { ignoreUnknownKeys = true }
     private val mutex = Mutex()
+    private val importMutex = Mutex()
     private val books = HashMap<Long, LocalBook>()
     private var cachedText: Pair<Long, String>? = null
 
-    override suspend fun getSources(): List<SourceRef> = listOf(MANGA, NOVEL)
+    override suspend fun getSources(): List<SourceRef> = listOf(MANGA, NOVEL, VIDEO)
 
     override suspend fun describe(sourceName: String): SourceDescriptor = SourceDescriptor(
         source = ref(sourceName),
@@ -74,8 +78,8 @@ class LocalSourceRuntime(
         defaultSortOrder = ORDER_NEWEST,
         filterCapabilities = SourceFilterCapabilities(false, false, true, false, false, false, false, false),
         pagingMode = SourcePagingMode.OFFSET,
-        isImageFetchingSupported = true,
-        isCoverFetchingSupported = true,
+        isImageFetchingSupported = sourceName != VIDEO.name,
+        isCoverFetchingSupported = sourceName != VIDEO.name,
         isChapterContentSupported = sourceName == NOVEL.name,
     )
 
@@ -101,6 +105,12 @@ class LocalSourceRuntime(
 
     override suspend fun getPages(chapter: SourceChapter, nextChapterUrl: String?): List<SourcePage> {
         val (item, index) = chapterOf(chapter.url)
+        if (item.format == LocalFormat.VIDEO) {
+            require(index == 0 && chapter.source == VIDEO) { "视频章节无效" }
+            val path = file(item)
+            require(fileSystem.exists(path)) { "本地视频已被删除" }
+            return listOf(SourcePage(stableId(chapter.url), fileUrl(path), null, VIDEO))
+        }
         val pages = book(item).chapters.getOrNull(index)?.pages ?: throw IllegalArgumentException("章节不存在")
         return pages.map { entry ->
             val url = "$SCHEME${item.id}/$index/$entry"
@@ -117,7 +127,7 @@ class LocalSourceRuntime(
             when (item.format) {
                 LocalFormat.TXT -> SourceChapterContent(textHtml(text(item).substring(part.textStart, part.textEnd)))
                 LocalFormat.EPUB -> epubChapter(item, part)
-                LocalFormat.ARCHIVE -> throw SourceOperationUnsupportedException()
+                LocalFormat.ARCHIVE, LocalFormat.VIDEO -> throw SourceOperationUnsupportedException()
             }
         }
 
@@ -138,27 +148,52 @@ class LocalSourceRuntime(
 
     override suspend fun getRelated(content: SourceContent): List<SourceContent> = emptyList()
 
-    /** Copies [source] into the store and reads it once; an unreadable file is rejected and leaves nothing behind. */
+    /** Copies [source] into the store; unreadable files leave nothing behind and identical imports keep their id. */
     suspend fun import(source: Path, fileName: String): SourceContent = withContext(Dispatchers.IO) {
-        val format = LocalFormat.of(fileName) ?: throw IllegalArgumentException("不支持的文件类型：$fileName（支持 CBZ/ZIP、EPUB、TXT）")
-        val size = fileSystem.metadata(source).size ?: 0L
-        // The same file imported again replaces the earlier copy instead of listing the work twice.
-        items().firstOrNull { it.fileName == fileName && it.size == size }?.let { remove(it.id) }
+        importMutex.withLock { importFile(source, fileName) }
+    }
+
+    private suspend fun importFile(source: Path, fileName: String): SourceContent {
+        require(LocalFiles.extension(fileName) != "m3u8") {
+            "暂不支持导入本地 M3U8 播放列表，请选择完整视频文件"
+        }
+        val format = LocalFormat.of(fileName) ?: throw IllegalArgumentException(
+            "不支持的文件类型：$fileName（支持 CBZ/ZIP、EPUB、TXT 和视频文件）",
+        )
+        require(fileSystem.metadata(source).isRegularFile) { "请选择文件" }
         val id = Random.nextLong(1, Long.MAX_VALUE)
         val directory = root / ITEMS / id.toString()
         fileSystem.createDirectories(directory)
         try {
             val target = directory / "book.${fileName.substringAfterLast('.').lowercase()}"
-            fileSystem.copy(source, target)
+            val input = HashingSource.sha256(fileSystem.source(source))
+            val size = input.use { fileSystem.sink(target).buffer().use { output -> output.writeAll(it) } }
+            val hash = input.hash.hex()
             val book = reader.read(target, format, fileName.substringBeforeLast('.'))
+            // Preserve ids, chapters, favourites and playback position when the same bytes are imported again.
+            // Same name and size alone cannot prove identity, and a failed import must never delete the old copy.
+            val existing = items().firstOrNull { candidate ->
+                candidate.fileName == fileName && candidate.size == size &&
+                    runCatching { fileHash(file(candidate)) == hash }.getOrDefault(false)
+            }
+            if (existing != null) {
+                fileSystem.deleteRecursively(directory)
+                return content(existing, book(existing))
+            }
             val item = LocalItem(id, book.title, fileName, format, size, now(), CHAPTER_SCHEME)
             fileSystem.write(directory / META) { writeUtf8(json.encodeToString(LocalItem.serializer(), item)) }
             mutex.withLock { books[id] = book }
-            content(item, book)
+            return content(item, book)
         } catch (error: Throwable) {
             runCatching { fileSystem.deleteRecursively(directory) }
             throw error
         }
+    }
+
+    private fun fileHash(path: Path): String = HashingSource.sha256(fileSystem.source(path)).use { input ->
+        val buffered = input.buffer()
+        while (!buffered.exhausted()) buffered.skip(minOf(8192L, buffered.buffer.size))
+        input.hash.hex()
     }
 
     suspend fun remove(contentId: Long) = withContext(Dispatchers.IO) {
@@ -210,7 +245,11 @@ class LocalSourceRuntime(
     }
 
     private fun content(item: LocalItem, book: LocalBook?): SourceContent {
-        val source = if (item.format.contentType == NOVEL.contentType) NOVEL else MANGA
+        val source = when (item.format.contentType) {
+            NOVEL.contentType -> NOVEL
+            VIDEO.contentType -> VIDEO
+            else -> MANGA
+        }
         val url = "$SCHEME${item.id}"
         return SourceContent(
             id = item.id,
@@ -220,7 +259,7 @@ class LocalSourceRuntime(
             publicUrl = "",
             rating = -1f,
             contentRating = null,
-            coverUrl = if (item.format == LocalFormat.TXT) null else url,
+            coverUrl = if (item.format == LocalFormat.TXT || item.format == LocalFormat.VIDEO) null else url,
             tags = book?.tags.orEmpty().map { SourceTag(it, it.lowercase(), source) }.toSet(),
             state = null,
             authors = book?.authors.orEmpty().toSet(),
@@ -307,6 +346,7 @@ class LocalSourceRuntime(
     private fun ref(sourceName: String): SourceRef = when (sourceName) {
         MANGA.name -> MANGA
         NOVEL.name -> NOVEL
+        VIDEO.name -> VIDEO
         else -> throw IllegalArgumentException("未知的本地来源：$sourceName")
     }
 
@@ -314,9 +354,10 @@ class LocalSourceRuntime(
         /** The [LocalItem.chapterScheme] of new imports. */
         const val CHAPTER_SCHEME = 2
 
-        /** Android's local source names (`LocalMangaSource`, `LocalNovelSource`). */
+        /** Android's local source names (`LocalMangaSource`, `LocalNovelSource`, `LocalVideoSource`). */
         val MANGA = SourceRef("LOCAL", "", "MANGA")
         val NOVEL = SourceRef("LOCAL_NOVEL", "", "NOVEL")
+        val VIDEO = SourceRef("LOCAL_VIDEO", "", "VIDEO")
         const val ORDER_NEWEST = "NEWEST"
         const val ORDER_TITLE = "ALPHABETICAL"
         private const val SCHEME = "local://"
@@ -325,7 +366,8 @@ class LocalSourceRuntime(
         private const val ASSETS = "assets"
         private const val PAGE_SIZE = 60
 
-        fun owns(sourceName: String): Boolean = sourceName == MANGA.name || sourceName == NOVEL.name
+        fun owns(sourceName: String): Boolean =
+            sourceName == MANGA.name || sourceName == NOVEL.name || sourceName == VIDEO.name
 
         private fun stableId(key: String): Long {
             val bytes = key.encodeUtf8().sha256()

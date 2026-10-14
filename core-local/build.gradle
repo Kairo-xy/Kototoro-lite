@@ -1,7 +1,7 @@
 // Local works (docs/architecture/ios-data-portability-plan-2026-10.md §1): CBZ/ZIP manga (including the archives
-// Kototoro writes with index.json), EPUB and TXT novels, read with okio's ZIP file system and served as a shared
-// SourceRuntime ("LOCAL" / "LOCAL_NOVEL", Android's local source names). Pure Kotlin; the platform passes the storage
-// directories and the legacy text decoder (GB18030 and other non-UTF-8 TXT files).
+// Kototoro writes with index.json), EPUB and TXT novels, and single video files served as a shared SourceRuntime
+// ("LOCAL" / "LOCAL_NOVEL" / "LOCAL_VIDEO", Android's local source names). Pure Kotlin; the platform passes storage
+// directories and the legacy text decoder, and checks video codec/container support before importing.
 plugins {
 	id 'org.jetbrains.kotlin.multiplatform'
 	id 'org.jetbrains.kotlin.plugin.serialization'

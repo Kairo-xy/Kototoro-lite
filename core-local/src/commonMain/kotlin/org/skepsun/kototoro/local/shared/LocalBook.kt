@@ -42,7 +42,7 @@ data class LocalChapter(
     val branch: String? = null,
 )
 
-/** Reads CBZ/ZIP, EPUB and TXT files with okio; [decodeLegacyText] handles TXT files that are not UTF-8. */
+/** Reads CBZ/ZIP, EPUB, TXT and video metadata; [decodeLegacyText] handles TXT files that are not UTF-8. */
 class LocalBookReader(
     private val fileSystem: FileSystem = FileSystem.SYSTEM,
     private val decodeLegacyText: (ByteArray) -> String? = { null },
@@ -58,6 +58,11 @@ class LocalBookReader(
             LocalFormat.ARCHIVE -> readArchive(file, fallbackTitle)
             LocalFormat.EPUB -> readEpub(file, fallbackTitle, splitSections)
             LocalFormat.TXT -> readText(file, fallbackTitle)
+            LocalFormat.VIDEO -> {
+                require((fileSystem.metadata(file).size ?: 0) > 0) { "视频文件是空的" }
+                LocalBook(fallbackTitle, emptyList(), null, emptyList(), null,
+                    listOf(LocalChapter(fallbackTitle, 1f)))
+            }
         }
 
     /** Bytes of one entry inside an archive or EPUB. */

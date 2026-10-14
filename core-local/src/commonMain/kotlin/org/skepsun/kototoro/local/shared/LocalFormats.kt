@@ -6,6 +6,8 @@ enum class LocalFormat(val contentType: String) {
     ARCHIVE("MANGA"),
     EPUB("NOVEL"),
     TXT("NOVEL"),
+    /** A single media file; the platform checks codec/container support before importing. */
+    VIDEO("VIDEO"),
     ;
 
     companion object {
@@ -13,6 +15,7 @@ enum class LocalFormat(val contentType: String) {
             "cbz", "zip" -> ARCHIVE
             "epub" -> EPUB
             "txt" -> TXT
+            "mp4", "m4v", "mov", "mkv", "ts", "webm", "avi" -> VIDEO
             else -> null
         }
     }

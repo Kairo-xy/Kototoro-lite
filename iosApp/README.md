@@ -3,6 +3,7 @@
 接手开发先读 [iOS 阶段交接记录](../docs/architecture/ios-development-handoff-2026-10.md)，
 其中列出调用链、生命周期约束、验证证据与后续工作入口。
 当前产品实施与验收状态见 [主要功能实施记录](../docs/architecture/ios-product-implementation-2026-10.md)。
+逐项补全的当前清单见 [iOS / Android 关键功能差距](../docs/architecture/ios-android-feature-parity-2026-10.md)。
 
 本模块已打通 SwiftUI 作品库分类 → Kotlin/Native → 共享 Room v84 数据库，以及可选的
 SwiftUI → 共享源协议 → C/JNI → OpenJDK Mobile Zero → JVM source-host 源调用链。
@@ -97,6 +98,17 @@ Native 的 `IosProductTest` 覆盖 Retina 密度与相机缩放分离、晚到�
 CMS fixture 的 `usage-sites.json?run=<标识>` 提供两个不同身份的测试站点，用于首次访问保持手动顺序和使用排序验收。
 修改服务脚本后需重启本地 fixture 服务，再运行相应用例。
 UI 测试每次创建唯一分类，测试数据留在测试设备沙盒中。
+
+本地作品现支持单个视频文件，入口为“浏览 → 视频空间 → 本地作品 → 本地视频 → 导入文件”。
+可选 MP4/M4V/MOV/MKV/TS/WebM/AVI，导入前由 AVFoundation 检查实际编码/容器及视频轨道；
+不支持的媒体明确拒绝。播放、收藏与进度沿用现有播放器/数据库；再次导入相同文件保留身份与续播。
+当前不支持仅导入 M3U8（缺少分片）、视频目录、自动封面或侧车字幕。
+本地视频回归（默认原生构建不需要 JVM）：
+`LocalImportTests/testImportedVideoPlaysAndReimportAfterRestartKeepsItsPosition` 和
+`LocalImportTests/testBrokenVideoIsRejectedBeforeItEntersTheLocalLibrary`。
+先运行 `stage-picker-fixtures.py <UUID>`（需已有 ffmpeg），生成 30 秒的 H.264/AAC 视频与损坏文件。
+若本机工程默认启用了真机 JVM，模拟器原生验收需显式指定
+`KOTOTORO_JVM=0 KOTOTORO_JVM_DIRECTORY= KOTOTORO_JVM_LDFLAGS=`，保留本机工程配置。
 
 如依赖下载失败，可给 Gradle 添加仓库约定的代理参数：
 `-Dhttp.proxyHost=127.0.0.1 -Dhttp.proxyPort=7890 -Dhttps.proxyHost=127.0.0.1 -Dhttps.proxyPort=7890`。

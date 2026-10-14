@@ -1,4 +1,5 @@
 import Combine
+import AVFoundation
 import KototoroShared
 import SwiftUI
 import ImageIO
@@ -571,7 +572,9 @@ private struct FilterPanelPlaceholder: View {
 
 /// Copies picked files into the app as local works; returns a summary when something needs saying.
 enum LocalImport {
-    static let contentTypes: [UTType] = [.zip, .epub, .plainText, UTType(filenameExtension: "cbz") ?? .data, .data]
+    static let contentTypes: [UTType] = [
+        .zip, .epub, .plainText, .movie, UTType(filenameExtension: "cbz") ?? .data, .data
+    ]
 
     @MainActor
     static func run(_ urls: [URL], runtime: IosSources) async -> String? {
@@ -581,6 +584,9 @@ enum LocalImport {
             let scoped = url.startAccessingSecurityScopedResource()
             defer { if scoped { url.stopAccessingSecurityScopedResource() } }
             do {
+                if runtime.localFileContentType(fileName: url.lastPathComponent) == "VIDEO" {
+                    try await validateVideo(url)
+                }
                 let content = try await runtime.importLocal(path: url.path, fileName: url.lastPathComponent)
                 imported.append(content.title)
             } catch {
@@ -589,5 +595,22 @@ enum LocalImport {
         }
         if failed.isEmpty { return imported.count > 1 ? "已导入 \(imported.count) 个文件" : nil }
         return (imported.isEmpty ? "" : "已导入 \(imported.count) 个文件。\n") + "未能导入：\n" + failed.joined(separator: "\n")
+    }
+
+    /// Container names alone do not establish codec support. Keep an unplayable file out of the local library.
+    static func validateVideo(_ url: URL) async throws {
+        let asset = AVURLAsset(url: url)
+        do {
+            let playable = try await asset.load(.isPlayable)
+            let tracks = try await asset.loadTracks(withMediaType: .video)
+            try Task.checkCancellation()
+            guard playable, !tracks.isEmpty else { throw URLError(.cannotDecodeContentData) }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            throw NSError(domain: "org.skepsun.kototoro.local", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "系统播放器无法读取此视频。请使用支持的视频编码（例如 H.264 的 MP4/MOV 文件）。"
+            ])
+        }
     }
 }

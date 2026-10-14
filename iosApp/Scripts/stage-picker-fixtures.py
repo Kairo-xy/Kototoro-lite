@@ -10,12 +10,15 @@
   * fixture_reader_paged.cbz — longer chapters for page-by-page drags across a chapter boundary.
   * fixture_reader_zoom.cbz — red/green/blue thirds, to see where a paged double tap zooms.
 
-Usage: stage-picker-fixtures.py <simulator id>
+Usage: stage-picker-fixtures.py <simulator id> (ffmpeg is required for the local video fixture)
 """
 import glob
 import gzip
 import os
+import pathlib
+import shutil
 import struct
+import subprocess
 import sys
 import zipfile
 import zlib
@@ -68,7 +71,20 @@ def png(width, height, rgb, columns=None):
 
 
 novel = "简介：本地导入测试用的小说，内容很短但足够测试。\n第一章 本地开端\n　　这是第一章的正文。\n第二章 本地结尾\n　　这是第二章的正文。\n"
+video = pathlib.Path(__file__).resolve().parents[1] / "build" / "local-video-fixture" / "fixture_video.mp4"
+if not video.exists():
+    video.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run([
+        shutil.which("ffmpeg") or "ffmpeg", "-loglevel", "error", "-y",
+        "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=24:duration=30",
+        "-f", "lavfi", "-i", "sine=frequency=440:duration=30",
+        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest",
+        "-movflags", "+faststart", str(video),
+    ], check=True)
 for storage in storages:
+    shutil.copyfile(video, os.path.join(storage, video.name))
+    with open(os.path.join(storage, "fixture_broken_video.mp4"), "wb") as file:
+        file.write(b"not a video")
     path = os.path.join(storage, "fixture_mihon.tachibk")
     with open(path, "wb") as file:
         file.write(gzip.compress(backup))

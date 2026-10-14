@@ -29,6 +29,7 @@ import org.skepsun.kototoro.tvbox.MacCmsSourceRuntime
 import org.skepsun.kototoro.bookmarks.domain.novelBookmarkChapterProgress
 import org.skepsun.kototoro.bookmarks.domain.resolveNovelBookmarkPosition
 import org.skepsun.kototoro.local.shared.LocalSourceRuntime
+import org.skepsun.kototoro.local.shared.LocalFormat
 import org.skepsun.kototoro.reader.novel.NovelDocumentBlock
 import org.skepsun.kototoro.reader.novel.NovelPageSegment
 import org.skepsun.kototoro.reader.novel.NovelParagraphStyle
@@ -440,6 +441,7 @@ class IosSources(
         val imported = if (local == null) emptyList() else listOf(
             IosSource(LocalSourceRuntime.MANGA.name, "本地漫画", "", LocalSourceRuntime.MANGA.contentType, "local"),
             IosSource(LocalSourceRuntime.NOVEL.name, "本地小说", "", LocalSourceRuntime.NOVEL.contentType, "local"),
+            IosSource(LocalSourceRuntime.VIDEO.name, "本地视频", "", LocalSourceRuntime.VIDEO.contentType, "local"),
         )
         return IosSourceCatalog(imported + video + external, extensionError)
     }
@@ -447,7 +449,10 @@ class IosSources(
     /** True when local import is available in this build. */
     val supportsLocalImport: Boolean get() = local != null
 
-    /** Imports a CBZ/ZIP, EPUB or TXT file (copied into the app); [fileName] decides the format and default title. */
+    /** The shared file classification, used by the platform for media validation before copying. */
+    fun localFileContentType(fileName: String): String? = LocalFormat.of(fileName)?.contentType
+
+    /** Imports a local file (copied into the app); [fileName] decides the format and default title. */
     @Throws(Exception::class)
     suspend fun importLocal(path: String, fileName: String): IosSourceContent =
         IosSourceContent(checkNotNull(local) { "本地导入不可用" }.import(path.toPath(), fileName))
