@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.collectIndexed
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -385,7 +386,30 @@ class BackupRepository @Inject constructor(
                             database.getSourcesDao().findAll().asFlow()
                         }
                     ).filter { format != ExportFormat.KOTATSU || it.source in kotatsuSourceNames }
-                        .map { SourceBackup(it, SourceBackup.lockCode(sourceLocks.get(it.source))) },
+                        .map { SourceBackup(it, SourceBackup.lockCode(sourceLocks.get(it.source))) }
+                        .let { native ->
+                            if (format == ExportFormat.KOTATSU) {
+                                native
+                            } else {
+                                // JSON sources are stored in their own table; export their locks too.
+                                kotlinx.coroutines.flow.flow {
+                                    emitAll(native)
+                                    database.getJsonSourceDao().findAll().forEach {
+                                        emit(
+                                            SourceBackup(
+                                                source = it.id,
+                                                sortKey = 0,
+                                                lastUsedAt = it.lastUsedAt,
+                                                addedIn = 0,
+                                                isPinned = it.isPinned,
+                                                isEnabled = it.isEnabled,
+                                                lock = SourceBackup.lockCode(sourceLocks.get(it.id)),
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
+                        },
                     serializer = serializer(),
                 )
 
@@ -643,7 +667,8 @@ class BackupRepository @Inject constructor(
                     }
 
                     BackupSection.SOURCES -> sectionInput.readJsonArray<SourceBackup>(serializer()).restoreToDb("SOURCES") {
-                        getSourcesDao().upsert(it.toEntity())
+                        // JSON sources have no MangaSourceEntity row; only their lock is restored here.
+                        if (!it.source.startsWith("JSON_")) getSourcesDao().upsert(it.toEntity())
                         when (it.lock) {
                             SourceBackup.LOCK_ON -> sourceLocks.set(it.source, true)
                             SourceBackup.LOCK_OFF -> sourceLocks.set(it.source, false)
