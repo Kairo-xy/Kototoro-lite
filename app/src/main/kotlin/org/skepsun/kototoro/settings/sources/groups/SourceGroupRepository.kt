@@ -99,6 +99,15 @@ class SourceGroupRepository @Inject constructor(
 						sortKey = it.sortKey,
 						locked = contentSources.lockState(it.source),
 					)
+				} + database.getJsonSourceDao().findAll().map {
+					// JSON sources live in their own table; their lock is keyed by the entity id.
+					SourceGroupSourceState(
+						source = it.id,
+						enabled = it.isEnabled,
+						pinned = it.isPinned,
+						sortKey = 0,
+						locked = contentSources.lockState(it.id),
+					)
 				},
 				jarPriority = settings.jarPriorityOrder.split(',').map { it.trim() }.filter { it.isNotEmpty() },
 			)
@@ -292,7 +301,7 @@ class SourceGroupRepository @Inject constructor(
 
 		val csPrefs = context.getSharedPreferences("cloudstream_plugin_versions", Context.MODE_PRIVATE)
 		File(File(context.filesDir, "cloudstream"), "plugins")
-			.listFiles { f -> f.isFile && (f.extension.equals("cs3", true) || f.extension.equals("jar", true)) }
+			.listFiles { f -> f.isFile && (f.extension.equals("cs3", true) || f.extension.equals("zip", true)) }
 			.orEmpty()
 			.forEach { file ->
 				val pkg = csPrefs.all.entries
