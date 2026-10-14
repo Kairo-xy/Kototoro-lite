@@ -64,6 +64,8 @@
     <string name="source_test_msg_text_chapter">Text chapter opened</string>
     <string name="source_test_msg_no_pages">Page list is empty</string>
     <string name="source_test_msg_image_failed">Image failed: %1$s</string>
+    <string name="source_test_msg_video_stream">%1$d videos, stream reachable</string>
+    <string name="source_test_msg_stream_failed">Stream failed: %1$s</string>
     <string name="source_test_msg_empty_body">Empty response body</string>
     <string name="source_test_msg_unsupported">not supported</string>
     <string name="source_test_msg_search_unsupported">Search not supported</string>
