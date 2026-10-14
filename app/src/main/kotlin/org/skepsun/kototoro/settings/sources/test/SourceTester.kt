@@ -14,6 +14,7 @@ import org.skepsun.kototoro.core.parser.ContentRepository
 import org.skepsun.kototoro.parsers.model.Content
 import org.skepsun.kototoro.parsers.model.ContentListFilter
 import org.skepsun.kototoro.parsers.model.ContentSource
+import org.skepsun.kototoro.parsers.model.ContentType
 import org.skepsun.kototoro.parsers.util.await
 import org.skepsun.kototoro.parsers.util.runCatchingCancellable
 import javax.inject.Inject
@@ -144,6 +145,15 @@ class SourceTester @Inject constructor(
 			val pageUrl = repo.getPageUrl(page)
 			val response = repo.fetchPageResponse(pageUrl, page)
 				?: (repo.getImageClient() ?: okHttp).newCall(repo.createPageRequest(pageUrl, page)).await()
+			if (repo.source.contentType.isVideo()) {
+				// Video sources expose MP4/HLS/DASH streams through ContentPage; an image check would fail them.
+				val error = verifyStream(response)
+				return@runOrSkip if (error == null) {
+					passed(R.string.source_test_msg_video_stream, pages.size)
+				} else {
+					failed(R.string.source_test_msg_stream_failed, error)
+				}
+			}
 			val error = verifyImage(response)
 			if (error == null) {
 				passed(R.string.source_test_msg_pages, pages.size)
@@ -224,8 +234,17 @@ class SourceTester @Inject constructor(
 		}
 	}
 
+	private fun verifyStream(response: Response): String? = response.use { r ->
+		if (!r.isSuccessful) return@use "HTTP ${r.code}"
+		val head = runCatching { r.peekBody(VERIFY_STREAM_PEEK_BYTES).bytes() }.getOrNull()
+		if (head == null || head.isEmpty()) return@use text(R.string.source_test_msg_empty_body)
+		val contentType = r.header("Content-Type").orEmpty()
+		if (looksLikeVideoStream(contentType, head)) null else "Content-Type: ${contentType.ifEmpty { "-" }}"
+	}
+
 	private companion object {
 		const val VERIFY_PEEK_BYTES = 64L * 1024
+		const val VERIFY_STREAM_PEEK_BYTES = 4L * 1024
 	}
 
 	private fun isCloudflareBlocked(e: Throwable): Boolean {
@@ -253,4 +272,25 @@ class SourceTester @Inject constructor(
 	private fun skipped(id: Int, vararg args: Any) = StepResult(StepStatus.SKIP, text(id, *args))
 
 	private fun elapsedMs(startedAt: Long): Long = (System.nanoTime() - startedAt) / 1_000_000
+}
+
+private fun ContentType.isVideo(): Boolean = this == ContentType.VIDEO || this == ContentType.HENTAI_VIDEO
+
+/**
+ * Whether a response looks like a playable video stream (progressive MP4/WebM, HLS or DASH manifest, or
+ * an opaque binary stream) rather than an HTML error page.
+ */
+internal fun looksLikeVideoStream(contentType: String, head: ByteArray): Boolean {
+	val type = contentType.substringBefore(';').trim().lowercase()
+	if (type.startsWith("video/") || type.startsWith("audio/")) return true
+	if (type.contains("mpegurl") || type.contains("dash+xml")) return true
+	val text = head.take(16).toByteArray().toString(Charsets.ISO_8859_1)
+	if (text.startsWith("#EXTM3U")) return true
+	if (head.size >= 8 && String(head, 4, 4, Charsets.ISO_8859_1) == "ftyp") return true
+	if (head.size >= 4 && head[0] == 0x1A.toByte() && head[1] == 0x45.toByte() &&
+		head[2] == 0xDF.toByte() && head[3] == 0xA3.toByte()
+	) {
+		return true // Matroska / WebM
+	}
+	return type == "application/octet-stream" || type == "binary/octet-stream"
 }
