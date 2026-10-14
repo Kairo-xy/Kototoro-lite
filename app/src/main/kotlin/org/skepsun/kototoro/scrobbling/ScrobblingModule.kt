@@ -89,8 +89,8 @@ object ScrobblingModule {
         authenticator: KitsuAuthenticator,
         @BaseHttpClient baseHttpClient: OkHttpClient,
     ): KitsuRepository {
-        // newBuilder() paylasilan SSL fabrikasini kullanir; sifirdan Builder().build() ana is parcaciginda
-        // her seferinde yeni SSLContext olusturup acilisi yavaslatiyordu.
+        // newBuilder() reuses the shared SSL factory; a fresh Builder().build() created a new SSLContext
+        // on the main thread every time and slowed down app startup.
         val okHttp = baseHttpClient.newBuilder().apply {
             authenticator(authenticator)
             addInterceptor(KitsuInterceptor(storage))
