@@ -5,6 +5,7 @@
 #import <ImageIO/ImageIO.h>
 #import <CoreText/CoreText.h>
 #import <JavaScriptCore/JavaScriptCore.h>
+#import <CommonCrypto/CommonDigest.h>
 #include <algorithm>
 #include <cmath>
 #include <memory>
@@ -340,6 +341,307 @@ void closeJavaScript(JNIEnv *env, jclass, jlong handle) {
 }
 }
 
+// HTTP transport for OkHttp's network stage (org.skepsun.kototoro.ios.shims.NativeTransport): URLSession does
+// connections, TLS and decompression natively; OkHttp keeps redirects, cookies, caching and every interceptor.
+// One state per request; its condition guards the head, the unread body and completion.
+@interface KTRNetState : NSObject
+@property(nonatomic, strong) NSCondition *condition;
+@property(nonatomic, strong) NSURLSessionDataTask *task;
+@property(nonatomic, strong) NSArray<NSString *> *head;
+@property(nonatomic, strong) NSMutableData *body;
+@property(nonatomic) NSUInteger offset;
+@property(nonatomic) BOOL done;
+@property(nonatomic, strong) NSError *error;
+@end
+@implementation KTRNetState
+@end
+
+@interface KTRNetDelegate : NSObject <NSURLSessionDataDelegate>
+@property(nonatomic, strong) NSMutableDictionary<NSNumber *, KTRNetState *> *states;
+@end
+@implementation KTRNetDelegate
+- (KTRNetState *)stateFor:(NSURLSessionTask *)task {
+    @synchronized(self.states) { return self.states[@(task.taskIdentifier)]; }
+}
+// OkHttp follows redirects itself, so cookies and interceptors see every hop.
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task
+    willPerformHTTPRedirection:(NSHTTPURLResponse *)response newRequest:(NSURLRequest *)request
+    completionHandler:(void (^)(NSURLRequest *))completionHandler {
+    completionHandler(nil);
+}
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)task didReceiveResponse:(NSURLResponse *)response
+    completionHandler:(void (^)(NSURLSessionResponseDisposition))completionHandler {
+    KTRNetState *state = [self stateFor:task];
+    NSArray<NSString *> *head = [KTRNetDelegate headFor:response];
+    [state.condition lock]; state.head = head; [state.condition broadcast]; [state.condition unlock];
+    completionHandler(NSURLSessionResponseAllow);
+}
+- (void)URLSession:(NSURLSession *)session dataTask:(NSURLSessionDataTask *)task didReceiveData:(NSData *)data {
+    KTRNetState *state = [self stateFor:task];
+    [state.condition lock]; [state.body appendData:data]; [state.condition broadcast]; [state.condition unlock];
+}
+- (void)URLSession:(NSURLSession *)session task:(NSURLSessionTask *)task didCompleteWithError:(NSError *)error {
+    KTRNetState *state = [self stateFor:task];
+    @synchronized(self.states) { [self.states removeObjectForKey:@(task.taskIdentifier)]; }
+    [state.condition lock]; state.done = YES; state.error = error; [state.condition broadcast]; [state.condition unlock];
+}
+/// [code, message, name, value, ...]. URLSession already decoded gzip/deflate/br bodies, so their encoding and
+/// length must not reach OkHttp's transparent gzip; it merges repeated Set-Cookie fields, so those are split again.
++ (NSArray<NSString *> *)headFor:(NSURLResponse *)response {
+    NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
+    NSMutableArray<NSString *> *head = [NSMutableArray arrayWithObjects:@(http.statusCode).stringValue, @"", nil];
+    NSString *encoding = [[http valueForHTTPHeaderField:@"Content-Encoding"] lowercaseString] ?: @"";
+    BOOL decoded = encoding.length > 0;
+    for (NSString *part in [encoding componentsSeparatedByString:@","]) {
+        NSString *coding = [part stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceCharacterSet];
+        if (![@[@"gzip", @"x-gzip", @"deflate", @"br"] containsObject:coding]) decoded = NO;
+    }
+    [http.allHeaderFields enumerateKeysAndObjectsUsingBlock:^(id key, id value, BOOL *) {
+        NSString *name = [key description], *lower = name.lowercaseString;
+        if ([lower isEqualToString:@"set-cookie"]) return;
+        if (decoded && ([lower isEqualToString:@"content-encoding"] || [lower isEqualToString:@"content-length"])) return;
+        [head addObject:name]; [head addObject:[value description]];
+    }];
+    NSString *cookies = [http valueForHTTPHeaderField:@"Set-Cookie"];
+    if (cookies.length > 0 && http.URL != nil) {
+        for (NSHTTPCookie *cookie in [NSHTTPCookie cookiesWithResponseHeaderFields:@{@"Set-Cookie": cookies} forURL:http.URL]) {
+            [head addObject:@"Set-Cookie"]; [head addObject:[KTRNetDelegate setCookie:cookie]];
+        }
+    }
+    return head;
+}
++ (NSString *)setCookie:(NSHTTPCookie *)cookie {
+    NSMutableString *line = [NSMutableString stringWithFormat:@"%@=%@; Path=%@", cookie.name, cookie.value,
+                             cookie.path.length > 0 ? cookie.path : @"/"];
+    // NSHTTPCookie marks a Domain attribute with a leading dot; without it the cookie is host-only.
+    if ([cookie.domain hasPrefix:@"."]) [line appendFormat:@"; Domain=%@", [cookie.domain substringFromIndex:1]];
+    if (cookie.expiresDate != nil) {
+        static NSDateFormatter *format;
+        static dispatch_once_t once;
+        dispatch_once(&once, ^{
+            format = [NSDateFormatter new];
+            format.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];
+            format.timeZone = [NSTimeZone timeZoneForSecondsFromGMT:0];
+            format.dateFormat = @"EEE, dd MMM yyyy HH:mm:ss 'GMT'";
+        });
+        [line appendFormat:@"; Expires=%@", [format stringFromDate:cookie.expiresDate]];
+    }
+    if (cookie.isSecure) [line appendString:@"; Secure"];
+    if (cookie.isHTTPOnly) [line appendString:@"; HttpOnly"];
+    if (cookie.sameSitePolicy.length > 0) [line appendFormat:@"; SameSite=%@", cookie.sameSitePolicy];
+    return line;
+}
+@end
+
+namespace {
+std::mutex netMutex;
+std::unordered_map<jlong, KTRNetState *> netStates;
+jlong nextNet = 1;
+KTRNetDelegate *netDelegate;
+NSURLSession *netSession() {
+    static NSURLSession *session;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSURLSessionConfiguration *configuration = [NSURLSessionConfiguration defaultSessionConfiguration];
+        // OkHttp's BridgeInterceptor owns cookies, CacheInterceptor owns caching.
+        configuration.HTTPCookieStorage = nil;
+        configuration.HTTPShouldSetCookies = NO;
+        configuration.HTTPCookieAcceptPolicy = NSHTTPCookieAcceptPolicyNever;
+        configuration.URLCache = nil;
+        configuration.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+        configuration.timeoutIntervalForResource = 24 * 60 * 60;
+        netDelegate = [KTRNetDelegate new];
+        netDelegate.states = [NSMutableDictionary new];
+        NSOperationQueue *queue = [NSOperationQueue new];
+        queue.maxConcurrentOperationCount = 1;
+        queue.name = @"Kototoro native HTTP";
+        session = [NSURLSession sessionWithConfiguration:configuration delegate:netDelegate delegateQueue:queue];
+    });
+    return session;
+}
+KTRNetState *netState(JNIEnv *env, jlong handle) {
+    std::lock_guard<std::mutex> lock(netMutex);
+    auto found = netStates.find(handle);
+    if (found == netStates.end()) { fail(env, "java/io/IOException", "Native request is closed"); return nil; }
+    return found->second;
+}
+void netFail(JNIEnv *env, NSError *error) {
+    if (error.code == NSURLErrorTimedOut) { fail(env, "java/net/SocketTimeoutException", "timeout"); return; }
+    const char *type = error.code == NSURLErrorCannotFindHost || error.code == NSURLErrorDNSLookupFailed
+        ? "java/net/UnknownHostException" : "java/io/IOException";
+    jclass exception = env->FindClass(type);
+    if (exception == nullptr) return;
+    jmethodID constructor = env->GetMethodID(exception, "<init>", "(Ljava/lang/String;)V");
+    NSString *message = [NSString stringWithFormat:@"%@ (%@ %ld)", error.localizedDescription, error.domain, (long)error.code];
+    if (constructor != nullptr) env->Throw(static_cast<jthrowable>(env->NewObject(exception, constructor, javaString(env, message))));
+}
+jboolean netAvailable(JNIEnv *, jclass) { return JNI_TRUE; }
+jlong netStart(JNIEnv *env, jclass, jstring address, jstring method, jobjectArray headers, jbyteArray body, jint timeout) {
+    @autoreleasepool {
+        NSURL *url = [NSURL URLWithString:string(env, address)];
+        if (url == nil) { fail(env, "java/io/IOException", "Invalid URL"); return 0; }
+        NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:url];
+        request.HTTPMethod = string(env, method);
+        request.HTTPShouldHandleCookies = NO;
+        request.timeoutInterval = timeout > 0 ? timeout / 1000.0 : 24 * 60 * 60;
+        // URLSession derives framing and connection headers itself.
+        NSSet *reserved = [NSSet setWithObjects:@"host", @"connection", @"content-length", @"transfer-encoding",
+                           @"keep-alive", @"proxy-connection", @"upgrade", nil];
+        jsize count = headers == nullptr ? 0 : env->GetArrayLength(headers);
+        for (jsize i = 0; i + 1 < count; i += 2) {
+            auto name = static_cast<jstring>(env->GetObjectArrayElement(headers, i));
+            auto value = static_cast<jstring>(env->GetObjectArrayElement(headers, i + 1));
+            NSString *field = string(env, name);
+            if (![reserved containsObject:field.lowercaseString]) [request addValue:string(env, value) forHTTPHeaderField:field];
+            env->DeleteLocalRef(name); env->DeleteLocalRef(value);
+        }
+        if (body != nullptr) request.HTTPBody = bytes(env, body);
+        if (env->ExceptionCheck()) return 0;
+        KTRNetState *state = [KTRNetState new];
+        state.condition = [NSCondition new];
+        state.body = [NSMutableData new];
+        NSURLSessionDataTask *task = [netSession() dataTaskWithRequest:request];
+        state.task = task;
+        @synchronized(netDelegate.states) { netDelegate.states[@(task.taskIdentifier)] = state; }
+        jlong handle;
+        { std::lock_guard<std::mutex> lock(netMutex); handle = nextNet++; netStates.emplace(handle, state); }
+        [task resume];
+        return handle;
+    }
+}
+/// The response head, or null while it has not arrived within [wait] milliseconds.
+jobjectArray netHead(JNIEnv *env, jclass, jlong handle, jint wait) {
+    @autoreleasepool {
+        KTRNetState *state = netState(env, handle); if (state == nil) return nullptr;
+        NSArray<NSString *> *head; NSError *error; BOOL done;
+        [state.condition lock];
+        if (state.head == nil && !state.done) [state.condition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:wait / 1000.0]];
+        head = state.head; error = state.error; done = state.done;
+        [state.condition unlock];
+        if (head == nil) {
+            if (error != nil) netFail(env, error);
+            else if (done) fail(env, "java/io/IOException", "Response without headers");
+            return nullptr;
+        }
+        jobjectArray result = env->NewObjectArray(static_cast<jsize>(head.count), env->FindClass("java/lang/String"), nullptr);
+        for (NSUInteger i = 0; result != nullptr && i < head.count; ++i) {
+            jstring value = javaString(env, head[i]);
+            env->SetObjectArrayElement(result, static_cast<jsize>(i), value); env->DeleteLocalRef(value);
+        }
+        return result;
+    }
+}
+/// Copies unread body bytes: the count, -1 at the end, or 0 when none arrived within [wait] milliseconds.
+jint netRead(JNIEnv *env, jclass, jlong handle, jbyteArray buffer, jint wait) {
+    @autoreleasepool {
+        KTRNetState *state = netState(env, handle); if (state == nil) return -1;
+        [state.condition lock];
+        if (state.offset == state.body.length && !state.done) {
+            [state.condition waitUntilDate:[NSDate dateWithTimeIntervalSinceNow:wait / 1000.0]];
+        }
+        NSUInteger available = state.body.length - state.offset;
+        if (available > 0) {
+            jsize count = static_cast<jsize>(std::min<NSUInteger>(available, env->GetArrayLength(buffer)));
+            env->SetByteArrayRegion(buffer, 0, count, static_cast<const jbyte *>(state.body.bytes) + state.offset);
+            state.offset += count;
+            // Drop consumed bytes in large steps, not per read, so a long body is not shifted repeatedly.
+            if (state.offset >= (1u << 20) && state.offset * 2 >= state.body.length) {
+                [state.body replaceBytesInRange:NSMakeRange(0, state.offset) withBytes:nullptr length:0];
+                state.offset = 0;
+            }
+            [state.condition unlock];
+            return count;
+        }
+        NSError *error = state.error; BOOL done = state.done;
+        [state.condition unlock];
+        if (error != nil) { netFail(env, error); return -1; }
+        return done ? -1 : 0;
+    }
+}
+/// Releases the request, cancelling it when it is still running. Idempotent.
+void netClose(JNIEnv *, jclass, jlong handle) {
+    KTRNetState *state;
+    {
+        std::lock_guard<std::mutex> lock(netMutex);
+        auto found = netStates.find(handle);
+        if (found == netStates.end()) return;
+        state = found->second; netStates.erase(found);
+    }
+    [state.task cancel];
+}
+}
+
+// Message digests for the JCA provider org.skepsun.kototoro.ios.shims.IosDigestProvider: the interpreter-only JVM
+// hashes about 1 MiB per second in Java; CommonCrypto does the same in milliseconds. The handle is the context's
+// address, owned by one Java digest object (freed once by its Cleaner).
+namespace {
+enum DigestAlgorithm : jint { DigestMD5, DigestSHA1, DigestSHA256, DigestSHA384, DigestSHA512 };
+struct Digest {
+    jint algorithm;
+    union { CC_MD5_CTX md5; CC_SHA1_CTX sha1; CC_SHA256_CTX sha256; CC_SHA512_CTX sha512; };
+};
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations" // MD5 stays available for extensions' compatibility
+void digestInit(Digest *digest) {
+    switch (digest->algorithm) {
+        case DigestMD5: CC_MD5_Init(&digest->md5); break;
+        case DigestSHA1: CC_SHA1_Init(&digest->sha1); break;
+        case DigestSHA256: CC_SHA256_Init(&digest->sha256); break;
+        case DigestSHA384: CC_SHA384_Init(&digest->sha512); break;
+        default: CC_SHA512_Init(&digest->sha512); break;
+    }
+}
+jlong digestCreate(JNIEnv *env, jclass, jint algorithm) {
+    if (algorithm < DigestMD5 || algorithm > DigestSHA512) { fail(env, "java/lang/IllegalArgumentException", "Unknown digest"); return 0; }
+    auto *digest = new Digest();
+    digest->algorithm = algorithm;
+    digestInit(digest);
+    return reinterpret_cast<jlong>(digest);
+}
+void digestUpdate(JNIEnv *env, jclass, jlong handle, jbyteArray data, jint offset, jint length) {
+    if (data == nullptr || offset < 0 || length < 0 || offset > env->GetArrayLength(data) - length) {
+        fail(env, "java/lang/ArrayIndexOutOfBoundsException", "Digest input range"); return;
+    }
+    if (length == 0) return;
+    auto *digest = reinterpret_cast<Digest *>(handle);
+    // No JNI calls while the array is pinned.
+    auto *bytes = static_cast<const uint8_t *>(env->GetPrimitiveArrayCritical(data, nullptr));
+    if (bytes == nullptr) return;
+    const uint8_t *input = bytes + offset;
+    auto size = static_cast<CC_LONG>(length);
+    switch (digest->algorithm) {
+        case DigestMD5: CC_MD5_Update(&digest->md5, input, size); break;
+        case DigestSHA1: CC_SHA1_Update(&digest->sha1, input, size); break;
+        case DigestSHA256: CC_SHA256_Update(&digest->sha256, input, size); break;
+        case DigestSHA384: CC_SHA384_Update(&digest->sha512, input, size); break;
+        default: CC_SHA512_Update(&digest->sha512, input, size); break;
+    }
+    env->ReleasePrimitiveArrayCritical(data, const_cast<uint8_t *>(bytes), JNI_ABORT);
+}
+/// The digest of everything since the last reset; the context starts over afterwards, like MessageDigest.digest().
+jbyteArray digestFinish(JNIEnv *env, jclass, jlong handle) {
+    auto *digest = reinterpret_cast<Digest *>(handle);
+    uint8_t out[CC_SHA512_DIGEST_LENGTH];
+    jsize length;
+    switch (digest->algorithm) {
+        case DigestMD5: CC_MD5_Final(out, &digest->md5); length = CC_MD5_DIGEST_LENGTH; break;
+        case DigestSHA1: CC_SHA1_Final(out, &digest->sha1); length = CC_SHA1_DIGEST_LENGTH; break;
+        case DigestSHA256: CC_SHA256_Final(out, &digest->sha256); length = CC_SHA256_DIGEST_LENGTH; break;
+        case DigestSHA384: CC_SHA384_Final(out, &digest->sha512); length = CC_SHA384_DIGEST_LENGTH; break;
+        default: CC_SHA512_Final(out, &digest->sha512); length = CC_SHA512_DIGEST_LENGTH; break;
+    }
+    digestInit(digest);
+    jbyteArray result = env->NewByteArray(length);
+    if (result != nullptr) env->SetByteArrayRegion(result, 0, length, reinterpret_cast<const jbyte *>(out));
+    return result;
+}
+#pragma clang diagnostic pop
+void digestReset(JNIEnv *, jclass, jlong handle) { digestInit(reinterpret_cast<Digest *>(handle)); }
+/// MessageDigest.clone(): the contexts are plain structs, so the copy continues from the same state.
+jlong digestCopy(JNIEnv *, jclass, jlong handle) { return reinterpret_cast<jlong>(new Digest(*reinterpret_cast<Digest *>(handle))); }
+void digestFree(JNIEnv *, jclass, jlong handle) { delete reinterpret_cast<Digest *>(handle); }
+}
+
 extern "C" int ktr_native_install(JNIEnv *env) {
     jclass type = env->FindClass("org/skepsun/kototoro/ios/shims/IosNative");
     // The independent fixture profile does not use Android shims.
@@ -356,9 +658,30 @@ extern "C" int ktr_native_install(JNIEnv *env) {
         {const_cast<char *>("createJavaScript"), const_cast<char *>("(Ljava/lang/Object;)J"), reinterpret_cast<void *>(createJavaScript)},
         {const_cast<char *>("evaluateJavaScript"), const_cast<char *>("(JLjava/lang/String;Ljava/lang/String;)Ljava/lang/String;"), reinterpret_cast<void *>(evaluateJavaScript)},
         {const_cast<char *>("closeJavaScript"), const_cast<char *>("(J)V"), reinterpret_cast<void *>(closeJavaScript)},
+        {const_cast<char *>("netAvailable"), const_cast<char *>("()Z"), reinterpret_cast<void *>(netAvailable)},
+        {const_cast<char *>("netStart"), const_cast<char *>("(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;[BI)J"), reinterpret_cast<void *>(netStart)},
+        {const_cast<char *>("netHead"), const_cast<char *>("(JI)[Ljava/lang/String;"), reinterpret_cast<void *>(netHead)},
+        {const_cast<char *>("netRead"), const_cast<char *>("(J[BI)I"), reinterpret_cast<void *>(netRead)},
+        {const_cast<char *>("netClose"), const_cast<char *>("(J)V"), reinterpret_cast<void *>(netClose)},
+        {const_cast<char *>("digestCreate"), const_cast<char *>("(I)J"), reinterpret_cast<void *>(digestCreate)},
+        {const_cast<char *>("digestUpdate"), const_cast<char *>("(J[BII)V"), reinterpret_cast<void *>(digestUpdate)},
+        {const_cast<char *>("digestFinish"), const_cast<char *>("(J)[B"), reinterpret_cast<void *>(digestFinish)},
+        {const_cast<char *>("digestReset"), const_cast<char *>("(J)V"), reinterpret_cast<void *>(digestReset)},
+        {const_cast<char *>("digestCopy"), const_cast<char *>("(J)J"), reinterpret_cast<void *>(digestCopy)},
+        {const_cast<char *>("digestFree"), const_cast<char *>("(J)V"), reinterpret_cast<void *>(digestFree)},
     };
     int result = env->RegisterNatives(type, methods, sizeof(methods) / sizeof(methods[0]));
-    env->DeleteLocalRef(type); return result;
+    env->DeleteLocalRef(type);
+    if (result != 0) return result;
+    // Native digests take precedence for every MessageDigest user (image store, artifact checks, extensions).
+    // Optional: an older shim jar without the provider keeps the JDK's digests.
+    jclass provider = env->FindClass("org/skepsun/kototoro/ios/shims/IosDigestProvider");
+    if (provider == nullptr) { env->ExceptionClear(); return 0; }
+    jmethodID install = env->GetStaticMethodID(provider, "install", "()V");
+    if (install != nullptr) env->CallStaticVoidMethod(provider, install);
+    if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+    env->DeleteLocalRef(provider);
+    return 0;
 }
 
 #if KTR_NATIVE_TEST_LIBRARY

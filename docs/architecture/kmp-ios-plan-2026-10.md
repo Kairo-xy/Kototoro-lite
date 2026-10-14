@@ -5957,3 +5957,58 @@ kototoro-parsers 1.4 s）。插件耗时来自仅解释执行的 JVM 对整个 J
   （kototoro-parsers 约 2.9 s、再漫画 0.25 s），k-parsers-r 与 UMA 未被加载。
 - 验证：`:source-host:test` 104 项、`:parser-host:test` 25 项（2 项条件跳过）通过，新增缓存注册/首次调用构造/产物被替换后拒绝/
   缓存损坏回退用例；真实预览 `testConvertedRealMihonApkRunsOnSimulator`、`testJarMangaPagesRender`、`testAniyomiEpisodePlays` 通过。
+
+## 118. iOS 扩展网络改由 URLSession 传输（2026-10-14）
+
+**测量**：模拟器 Zero 上用本机 HTTPS 服务（网络耗时约为 0）测纯 CPU 成本。原 OkHttp + JSSE 首次连接 2606 ms，
+1 MiB 响应体 1159–1190 ms，4 MiB 4284 ms；同进程 URLSession 分别为 18–77、6–8、20 ms。明文 HTTP 下 OkHttp 读 1 MiB 只要
+6–12 ms，说明开销几乎全在解释执行的 TLS 记录解密（AES-GCM 1 MiB 668 ms、SHA-256 1 MiB 865 ms）。漫画页图片、列表与
+详情请求都经扩展的 OkHttp client，因此每 MiB 约 1 秒的解密是图片加载的主要瓶颈。
+
+**实现**：`mihon-ios-shims` 在 classpath 首位提供 OkHttp 5.4.0 的 `ConnectInterceptor` 替代类。可由 URLSession 承载的调用
+改走 `NativeTransport`，其余照原实现建立 OkHttp 连接（调用同一内部 ABI `initExchange`/`copy`，固定版本，升级须重验）。
+- 位置在应用拦截器、`RetryAndFollowUpInterceptor`、`BridgeInterceptor`、`CacheInterceptor` 之后：扩展自己追加的拦截器、
+  域名改写、Cloudflare 处理、Cookie jar、重定向与缓存语义不变；客户端的网络拦截器在新链上照常执行，最后由 URLSession 收发。
+- URLSession 不存 Cookie、不跟随重定向、不用 URL 缓存；已解码的 gzip/deflate/br 去掉 `Content-Encoding`/`Content-Length`，
+  避免 OkHttp 二次解压；URLSession 合并的多个 `Set-Cookie` 经 `NSHTTPCookie` 拆回逐条（Domain/Path/Expires/Secure/
+  HttpOnly/SameSite）。响应体按需流式拉取，读完或 Cleaner 回收时释放原生缓冲；`call.cancel()`、call timeout 与线程中断
+  在 200 ms 内生效。超时映射为 `SocketTimeoutException`，解析失败为 `UnknownHostException`；没有 Exchange 时
+  `retryAfterFailure()` 返回 false，不会重复发送。
+- 保留 OkHttp 连接：WebSocket、显式代理、自定义信任管理器或主机名校验、证书固定、duplex/one-shot 请求体。
+  `-Dkototoro.native.net=false` 可整体关闭。原生实现在 `KototoroNative.mm`，与 ImageIO/JavaScriptCore 同一注册表。
+- 附带效果：TLS 指纹与 WKWebView 同源（Cloudflare clearance 绑定指纹时更容易复用）；遵循系统代理/VPN。
+
+**验证**：`test-ios-shims.py` 在 macOS 上用真实 URLSession 运行 `NativeTransportTest` 11 项（原生路径计数、非 ASCII 头、
+3 MiB 分小块读取、EOF 后重复读、多个 Set-Cookie 进入 jar 并回传、重定向由 OkHttp 跟随且保留每跳 Cookie、gzip 不二次
+解压、POST 与 Content-Type、网络拦截器、取消、call timeout、自定义信任回退），原有 shims 15 项与 compat 2 项通过；
+iphoneos 目标 `-Wall -Wextra -Werror` 编译通过。模拟器 Zero 上默认 OkHttpClient 走新路径：首次 HTTPS 44 ms、1 MiB 7 ms、
+4 MiB 21 ms，10 个请求全部经 URLSession。
+`-Dkototoro.native.net.trace=true` 每个请求向 stderr 输出一行（URLSession 或保留 OkHttp 的原因、主机、状态、耗时）。
+
+**真实源**：模拟器 Zero 上以 JSONL serve 驱动真实扩展，trace 显示再漫画与 MangaDex 的 10 个请求全部经 URLSession，
+没有回退。Tsundoku（AllNovelFull，2166 章）、再漫画、Aniyomi（AnimeGG）、MangaDex、BILINOVEL 均完成列表 → 详情 →
+章节 → 图片/正文/视频地址；Mac JVM 上开启与关闭原生传输结果一致。MangaDex 1.4 MB 图片仍约 3 s：响应头 0.64 s，其余为
+CDN 下载与宿主在解释器中计算图片 SHA-256（约 0.87 s/MiB），后者是下一个可原生化的热点。
+UI 回归（真实扩展预览）`testConvertedRealMihonApkRunsOnSimulator`、`testJarMangaPagesRender`、`testAniyomiEpisodePlays`、
+`testJarNovelChapterText` 通过。`testTsundokuNovelChapterText` 失败与本改动无关：同一代码关闭原生传输时同样失败，
+录屏显示正文已显示（分页小说阅读器），用例等待的 `novel.firstParagraph` 不再出现。
+
+## 119. iOS 消息摘要改由 CommonCrypto 计算（2026-10-14）
+
+§118 之后的下一个解释器热点是 SHA-256：模拟器 Zero 上 JDK 的 SUN 提供者 1 MiB 需 817 ms（MD5 323 ms）。图片与封面物化、
+扩展/插件安装与首次加载校验、偏好文件摘要、扩展自身的 MD5/SHA 签名以及仍走 JSSE 的握手都经 `MessageDigest`。
+
+- `mihon-ios-shims` 新增 JCA 提供者 `IosDigestProvider`（名称 `KototoroIOS`）：MD5、SHA-1、SHA-256、SHA-384、SHA-512 及常用
+  别名/OID 由 CommonCrypto 计算。`KototoroNative.mm` 在注册 native 方法后立即调用 `install()` 插到提供者首位，早于任何宿主代码；
+  旧 shim JAR 没有该类或安装失败时保留 JDK 实现，不影响 JVM 启动。共享 source-host/parser-host 代码不变。
+- 单字节与小块更新在 Java 侧批量，较大输入经 `GetPrimitiveArrayCritical` 直接交给 CommonCrypto；`clone()` 复制原生上下文
+  （JSSE 握手哈希依赖）；上下文由 Cleaner 释放。`-Dkototoro.native.digest=false` 关闭。
+- 验证：`IosDigestProviderTest` 6 项在 macOS 真实 JNI 上与 SUN 逐字节一致（5 种算法、0–1 MiB+3 的边界长度、单字节/小块/大块/
+  ByteBuffer 混合更新、digest/reset 复用、未完成状态下 clone 分叉、写入调用方缓冲、2 万个未完成实例回收）；shims 其他 26 项与
+  compat 2 项通过，iphoneos `-Wall -Wextra -Werror` 编译通过。模拟器 Zero：SHA-256 1 MiB 0.58 ms、MD5 2.2 ms，默认
+  `MessageDigest.getInstance` 即取到该提供者；真实扩展 serve 的 sources 步骤（扩展/插件哈希校验）4.0 s → 2.0 s。图片步骤受在线
+  下载波动主导，单次对比不能分离出摘要耗时，按微基准 2.5 MB 图片约省 2 s CPU。
+- UI 回归（真实扩展预览，含 §118/§119）：`testConvertedRealMihonApkRunsOnSimulator`、`testJarMangaPagesRender`、
+  `testAniyomiEpisodePlays` 通过。`testJarNovelChapterText` 在同一时间的工作区构建中失败：录屏显示章节与插图已加载（分页小说
+  阅读器加入浮动操作按钮的未提交改动），用例等待的 `novel.firstParagraph` 不再出现，与 Tsundoku 用例同因，需随阅读器改动更新用例。
+  注意：多个会话共用同一模拟器会互相重装应用、终止进程并改写 `space.kind` 等偏好，UI 回归应独占模拟器或使用克隆设备。

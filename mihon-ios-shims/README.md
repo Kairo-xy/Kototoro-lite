@@ -19,6 +19,8 @@
 | zstd | 已有 aircompressor 的 Java 编解码器，供 OkHttp 和 Okio ABI 使用，关闭传递到底层流 |
 | 系统资源 / 内存 / 时钟 | 独立 Resources、Configuration、DisplayMetrics、JVM 内存数据与单调时钟 |
 | 网络适配 | ServerConfig 的 FlareSolverr 配置 ABI 和 UserAgentInterceptor；WebView 与 Cookie 在 mihon-ios-compat |
+| 网络传输 | 替换 OkHttp 5.4.0 的 `ConnectInterceptor`：连接、TLS 与解压改由 URLSession 执行（`NativeTransport`）；应用/网络拦截器、重定向、Cookie jar、缓存仍在 OkHttp。WebSocket、自定义信任/主机名校验、证书固定与显式代理保留 OkHttp 连接；`-Dkototoro.native.net=false` 关闭 |
+| 消息摘要 | JCA 提供者 `KototoroIOS`（CommonCrypto 的 MD5/SHA-1/SHA-256/SHA-384/SHA-512，含常用别名与 OID）在 native 注册后插到首位，图片物化、产物校验、扩展与 JSSE 的 `MessageDigest` 均使用；`-Dkototoro.native.digest=false` 关闭 |
 
 明确的能力边界：这不是完整 Android framework。QuickJS 引擎专用字节码不能由 JavaScriptCore 执行，`compile/execute`
 会明确报不支持；PDF 当前只支持整页默认变换；ImageDecoder 自动去边和背景覆盖不支持；复杂 Android span/bidi 排版、
