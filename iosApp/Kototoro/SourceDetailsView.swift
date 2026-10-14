@@ -56,8 +56,20 @@ final class SourceDetailsModel: ObservableObject {
         return chapters.map(\.branch).filter { seen.insert($0).inserted }
     }
 
+    /// List chapters by the numbers the extension declared instead of the source's own order (the default, as Mihon
+    /// lists them): some extensions misparse numbers from titles, which would scramble a number-sorted list.
+    @Published var orderByNumber = false
+
+    /// Stable: chapters with equal numbers keep the source order.
+    private func ordered(_ list: [IosSourceChapter]) -> [IosSourceChapter] {
+        guard orderByNumber else { return list }
+        return list.enumerated()
+            .sorted { ($0.element.number, $0.offset) < ($1.element.number, $1.offset) }
+            .map(\.element)
+    }
+
     func chapterList(query: String, newestFirst: Bool) -> [IosSourceChapter] {
-        var chapters = self.chapters
+        var chapters = ordered(self.chapters)
         if branches.count > 1 { chapters = chapters.filter { $0.branch == selectedBranch } }
         let text = query.trimmingCharacters(in: .whitespaces)
         if !text.isEmpty { chapters = chapters.filter { $0.title.localizedCaseInsensitiveContains(text) } }
@@ -88,9 +100,9 @@ final class SourceDetailsModel: ObservableObject {
     }
 
     var visibleChapters: [IosSourceChapter] {
-        guard isVideo, lines.count > 1 else { return chapters }
+        guard isVideo, lines.count > 1 else { return ordered(chapters) }
         let line = selectedLine ?? lines.first ?? nil
-        return chapters.filter { $0.line == line }
+        return ordered(chapters.filter { $0.line == line })
     }
 
     /// Shows this session's details, the record the screen was opened with (library, history) or the details saved
@@ -147,6 +159,8 @@ struct SourceDetailsView: View {
     @State private var savingFavourite = false
     @State private var chapterQuery = ""
     @AppStorage("details.newestFirst") private var newestFirst = false
+    /// "source" (default) or "number"; see SourceDetailsModel.orderByNumber.
+    @AppStorage("details.chapterOrder") private var chapterOrder = "source"
     @AppStorage(PanoramaKeys.enabled) private var panorama = true
     @AppStorage(PanoramaKeys.layout) private var panoramaLayout = PanoramaLayout.top
     @State private var scrollOffset: CGFloat = 0
@@ -222,6 +236,8 @@ struct SourceDetailsView: View {
             resumeIfAsked()
         }
         .refreshable { await model.refresh(); await refreshRecords(); await sources.refreshSettings() }
+        .onAppear { model.orderByNumber = chapterOrder == "number" }
+        .onChange(of: chapterOrder) { _, order in withAnimation { model.orderByNumber = order == "number" } }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if let url = URL(string: model.content.publicUrl), url.scheme?.hasPrefix("http") == true {
@@ -559,8 +575,20 @@ struct SourceDetailsView: View {
             HStack {
                 Text("章节（\(model.chapters.count)）")
                 Spacer()
-                Button(newestFirst ? "最新在前" : "最早在前", systemImage: "arrow.up.arrow.down") {
-                    withAnimation { newestFirst.toggle() }
+                Menu {
+                    Picker("排序依据", selection: $chapterOrder) {
+                        Text("源顺序").tag("source")
+                        Text("章节号").tag("number")
+                    }
+                    .pickerStyle(.inline)
+                    Picker("方向", selection: $newestFirst) {
+                        Text("最早在前").tag(false)
+                        Text("最新在前").tag(true)
+                    }
+                    .pickerStyle(.inline)
+                } label: {
+                    Label((chapterOrder == "number" ? "章节号 · " : "") + (newestFirst ? "最新在前" : "最早在前"),
+                          systemImage: "arrow.up.arrow.down")
                 }
                 .labelStyle(.titleAndIcon).font(.caption).textCase(nil)
                 .accessibilityIdentifier("details.sort")

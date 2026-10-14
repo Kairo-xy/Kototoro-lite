@@ -6038,3 +6038,17 @@ UI（真实扩展预览）新增 `SourceRuntimeTests.testReopenedLongChapterList
 并显示"正在更新章节…"（后台刷新约 44 s），重启应用后由保存的详情约 2 s 出现；`testConvertedRealMihonApkRunsOnSimulator`、
 `testAniyomiEpisodePlays` 回归通过。另见：宿主按 `number` 排序章节，AllNovelFull 用 `(\d+)\D*$` 取标题末尾数字作章节号
 （"Wedding Night 1" 记为 1），使该源章节顺序错乱；与本节缓存无关，待定是否改为保留源顺序。
+
+## 121. 章节默认保留源顺序，按章节号排序改为可选（2026-10-14）
+
+- source-host 的 Mihon/Tsundoku 与 Aniyomi 运行时不再按扩展声明的章节号/集数重排：保留源列表（反转为最早在前），
+  缺失的编号仍按位置补齐。与 Mihon/Aniyomi 的列表顺序一致；扩展从标题误解析编号时不会再打乱列表，
+  前后章导航（`SourceChapterNavigation`）随之按源顺序。桌面端消费同一宿主，同样生效。
+- 夹具让声明编号与列表顺序矛盾（Mihon 最新章 0.5、Aniyomi Hosters 1.5），断言保持源顺序；恢复排序时用例失败
+  （期望 `[old, new]`，实际 `[new, old]`）。`:source-host:test` 107 项通过。
+- iOS 详情页"排序"改为菜单：排序依据"源顺序"（默认）/"章节号"（`details.chapterOrder`），方向"最早在前"/"最新在前"
+  （沿用 `details.newestFirst`）。按章节号为稳定排序，同号保持源顺序；视频剧集同样适用。阅读器的前后章仍按源顺序。
+- 已知：Tsundoku AllNovelFull 1.6.19 自身先用 `(\d+)\D*$` 从标题末尾取编号（"Chapter 2157 - Wedding Night 1" 记为 1），
+  再按该编号 `sortedWith` 排序后返回；其"源顺序"即为错乱顺序，与 Mihon 中所见一致，宿主保留源顺序不能修正该源。
+- UI：新增 `SourceRuntimeTests.testChapterOrderMenuDefaultsToSourceOrder`（默认源顺序、菜单四个选项、切换章节号与恢复）通过；
+  `testConvertedRealMihonApkRunsOnSimulator`、`testAniyomiEpisodePlays` 回归通过。

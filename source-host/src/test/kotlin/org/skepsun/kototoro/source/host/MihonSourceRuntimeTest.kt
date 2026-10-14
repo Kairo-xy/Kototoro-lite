@@ -71,8 +71,9 @@ class MihonSourceRuntimeTest {
         assertEquals(seed.sourceData, details.sourceData)
         assertEquals("<p>description</p>", details.description)
         val chapters = requireNotNull(details.chapters)
+        // Source order, oldest first, even where the declared number says otherwise.
         assertEquals(listOf("old", "new"), chapters.map { it.title })
-        assertEquals(listOf(1f, 2f), chapters.map { it.number })
+        assertEquals(listOf(1f, 0.5f), chapters.map { it.number })
         assertEquals(1720000000000L, chapters[0].uploadDate)
         assertEquals("team", chapters[0].branch)
         assertEquals(MihonModelRules.chapterId(chapters[0].url, SOURCE, seed.url), chapters[0].id)

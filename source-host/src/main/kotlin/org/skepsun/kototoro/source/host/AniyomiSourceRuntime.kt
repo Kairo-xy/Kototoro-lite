@@ -171,7 +171,7 @@ class AniyomiSourceRuntime @JvmOverloads constructor(
                 val declared = (AniyomiModelAdapter.read(native, "getEpisode_number") as? Number)?.toFloat() ?: -1f
                 adapter.episode(native, parentUrl, if (declared > 0) declared else (index + 1).toFloat())
                     .also { session.episodes[it.id] = adapter.copyEpisode(native) }
-            }.sortedBy { it.number }
+            } // Source order (oldest first), not by extension-declared numbers, as Aniyomi lists them.
             adapter.detailFallbacks(details, original)
             session.animes[parentUrl] = adapter.copy(details)
             adapter.content(details, chapters).copy(id = content.id)

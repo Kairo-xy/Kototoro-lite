@@ -420,6 +420,45 @@ final class SourceRuntimeTests: XCTestCase {
         XCTAssertTrue(revealChapter(in: app, timeout: 15).exists, "Saved details: \(app.debugDescription)")
     }
 
+    /// Chapters follow the source's order by default; numbers declared by the extension are an opt-in order.
+    @MainActor
+    func testChapterOrderMenuDefaultsToSourceOrder() throws {
+        let app = XCUIApplication()
+        app.launch()
+        app.tabBars.buttons["浏览"].tap()
+        if !app.staticTexts["sources.extensionRuntime"].waitForExistence(timeout: 15) ||
+            app.staticTexts["独立测试源，仅用于运行时验证"].exists {
+            throw XCTSkip("Select the real extension preview profile to run this test")
+        }
+        let search = app.pageSearchField()
+        XCTAssertTrue(search.waitForExistence(timeout: 30))
+        search.tap()
+        search.typeText("MIHON_524579092615598717")
+        let source = app.buttons["source.MIHON_524579092615598717"]
+        XCTAssertTrue(source.waitForExistence(timeout: 90))
+        source.tap()
+        let work = app.descendants(matching: .any).matching(
+            NSPredicate(format: "identifier BEGINSWITH %@", "source.content.")).firstMatch
+        XCTAssertTrue(work.waitForExistence(timeout: 60))
+        work.tap()
+        XCTAssertTrue(revealChapter(in: app, timeout: 60).exists)
+        let menu = app.buttons["details.sort"]
+        XCTAssertTrue(menu.waitForExistence(timeout: 10))
+        let resetOrder = menu.label.contains("章节号")
+        if resetOrder { menu.tap(); app.buttons["源顺序"].tap() }
+        XCTAssertFalse(menu.label.contains("章节号"), "Source order is the default: \(menu.label)")
+        menu.tap()
+        for option in ["源顺序", "章节号", "最早在前", "最新在前"] {
+            XCTAssertTrue(app.buttons[option].waitForExistence(timeout: 5), "Missing \(option): \(app.debugDescription)")
+        }
+        app.buttons["章节号"].tap()
+        XCTAssertTrue(menu.label.contains("章节号"), menu.label)
+        menu.tap()
+        app.buttons["源顺序"].tap()
+        XCTAssertFalse(menu.label.contains("章节号"), menu.label)
+        XCTAssertTrue(revealChapter(in: app, timeout: 10).exists)
+    }
+
     /// Browse results are poster cards (buttons); match by label regardless of element type.
     private func item(_ app: XCUIApplication, _ label: String) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", label)).firstMatch

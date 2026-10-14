@@ -81,9 +81,10 @@ class AniyomiSourceRuntimeTest {
         assertEquals("FINISHED", details.state)
         assertEquals(seed.coverUrl, details.coverUrl)
         val episodes = requireNotNull(details.chapters)
-        // Listed newest first: Hosters(3), First(missing), Failing(0); reversed they are numbered 1, 2 (index) and 3.
+        // Listed newest first: Hosters(1.5), First(missing), Failing(0); reversed and kept in that order, numbered
+        // 1, 2 (index) and the declared 1.5, which does not reorder them.
         assertEquals(listOf("Failing", "First", "Hosters"), episodes.map { it.title })
-        assertEquals(listOf(1f, 2f, 3f), episodes.map { it.number })
+        assertEquals(listOf(1f, 2f, 1.5f), episodes.map { it.number })
         assertEquals("Fansub", episodes.first().scanlator)
         assertEquals(1720000000000L, episodes.first().uploadDate)
     }

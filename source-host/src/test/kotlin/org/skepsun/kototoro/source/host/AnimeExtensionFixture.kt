@@ -46,7 +46,7 @@ internal object AnimeExtensionFixture {
             }
             public Object getEpisodeList(SAnimeImpl anime, Continuation<Object> continuation) {
                 // Newest first, as sites list them; the second one has no number.
-                return Arrays.asList(episode("/ep/hoster", "Hosters", 3f), episode("/ep/1", "First", -1f),
+                return Arrays.asList(episode("/ep/hoster", "Hosters", 1.5f), episode("/ep/1", "First", -1f),
                     episode("/ep/failing", "Failing", 0f));
             }
 

@@ -174,7 +174,9 @@ class MihonSourceRuntime @JvmOverloads constructor(
                     val declared = (MihonReflection.call(nativeChapter, "getChapter_number") as Number).toFloat()
                     adapter.chapter(nativeChapter, parentUrl, if (declared >= 0) declared else (index + 1).toFloat())
                         .also { session.chapters[it.id] = snapshotChapter(nativeChapter, lease) }
-                }.sortedBy { it.number }
+                }
+            // Source order (oldest first), as Mihon lists them: extensions' numbers can be wrong (AllNovelFull reads
+            // the last number of a title, so "Wedding Night 1" is 1), and the reading order follows the list.
             adapter.detailFallbacks(details, original)
             session.mangas[parentUrl] = snapshot(details)
             // Both modes fetch fresh content. Snapshots retain opaque extension fields, not cached details responses.

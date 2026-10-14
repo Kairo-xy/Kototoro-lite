@@ -318,7 +318,8 @@ internal class RuntimeJarFixture(private val root: Path) {
                     if (!details || !chapters) throw new IllegalArgumentException("missing update flags");
                     SMangaImpl partial = new SMangaImpl(); partial.setUrl("wrong URL"); partial.setThumbnail_url(manga.getUrl());
                     partial.setDescription("<p>description</p>");
-                    SChapterImpl newest = chapter("/chapter/2", -1, "new");
+                    // A declared number that disagrees with the list order (extensions misparse titles).
+                    SChapterImpl newest = chapter("/chapter/2", 0.5f, "new");
                     SChapterImpl oldest = chapter("/chapter/1", -1, "old"); oldest.setDate_upload(1720000000000L);
                     return new SMangaUpdate(partial, java.util.Arrays.asList(newest, oldest));
                 }
