@@ -98,7 +98,7 @@ internal class KotatsuLoaderContextAdapter(
     }
 }
 
-/** Kotatsu parser Bitmap -> host Bitmap köprüsü; karıştırılmış (scrambled) görsellerin çözülmesi buna bağlı. */
+/** Bridges a Kotatsu parser Bitmap to a host Bitmap; descrambling of scrambled chapter images depends on it. */
 private class KotatsuBitmapAdapter(
     val delegate: org.skepsun.kototoro.parsers.bitmap.Bitmap,
 ) : KTBitmap {
