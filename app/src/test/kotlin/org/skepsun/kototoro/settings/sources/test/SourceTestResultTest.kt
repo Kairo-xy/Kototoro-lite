@@ -63,4 +63,14 @@ class SourceTestResultTest {
 		)
 		overallStatusOf(steps) shouldBe StepStatus.FAIL
 	}
+
+	@Test
+	fun `video streams are accepted and html error pages are not`() {
+		looksLikeVideoStream("video/mp4", ByteArray(0)) shouldBe true
+		looksLikeVideoStream("application/vnd.apple.mpegurl", ByteArray(0)) shouldBe true
+		looksLikeVideoStream("text/plain", "#EXTM3U\n#EXT-X-VERSION:3".toByteArray()) shouldBe true
+		looksLikeVideoStream("", byteArrayOf(0, 0, 0, 24) + "ftypmp42".toByteArray()) shouldBe true
+		looksLikeVideoStream("application/octet-stream", byteArrayOf(1, 2, 3)) shouldBe true
+		looksLikeVideoStream("text/html; charset=utf-8", "<html>blocked</html>".toByteArray()) shouldBe false
+	}
 }
