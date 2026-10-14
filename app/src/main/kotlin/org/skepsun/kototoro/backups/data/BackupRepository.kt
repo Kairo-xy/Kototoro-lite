@@ -402,7 +402,7 @@ class BackupRepository @Inject constructor(
                                                 lastUsedAt = it.lastUsedAt,
                                                 addedIn = 0,
                                                 isPinned = it.isPinned,
-                                                isEnabled = it.isEnabled,
+                                                isEnabled = it.enabled,
                                                 lock = SourceBackup.lockCode(sourceLocks.get(it.id)),
                                             ),
                                         )
