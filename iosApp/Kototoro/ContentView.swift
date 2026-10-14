@@ -9,6 +9,7 @@ struct ContentView: View {
     @StateObject private var downloads = ReaderDownloadQueue(
         file: NativeSourceTransport.downloadQueueFile
     )
+    @StateObject private var repositories = RepositoriesModel()
     @Environment(\.scenePhase) private var scenePhase
     @State private var incomingLink: IncomingRepositoryLink?
     @State private var openedFileMessage: String?
@@ -37,7 +38,25 @@ struct ContentView: View {
             NavigationStack {
                 List {
                     Section {
-                        NavigationLink { RepositoriesView() } label: { Label("仓库与扩展", systemImage: "shippingbox") }
+                        NavigationLink { RepositoriesView() } label: {
+                            HStack {
+                                Label("仓库与扩展", systemImage: "shippingbox")
+                                if repositories.updatesCount > 0 {
+                                    Spacer()
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "arrow.triangle.2.circlepath")
+                                            .font(.caption2)
+                                        Text("\(repositories.updatesCount)")
+                                            .font(.caption2.bold())
+                                    }
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 3)
+                                    .background(Color.orange.opacity(0.18))
+                                    .foregroundStyle(.orange)
+                                    .clipShape(Capsule())
+                                }
+                            }
+                        }
                         NavigationLink { ReaderDownloadsView() } label: { Label("下载", systemImage: "arrow.down.circle") }
                             .accessibilityIdentifier("settings.downloads")
                         NavigationLink { BackupView() } label: { Label("备份与恢复", systemImage: "externaldrive") }
@@ -64,6 +83,7 @@ struct ContentView: View {
                 .navigationTitle("设置")
             }
             }
+            .badge(repositories.updatesCount)
             // The system's separate search button at the trailing end of the tab bar (iOS 26).
             Tab(value: MainTab.search, role: .search) {
                 GlobalSearchView(query: $globalSearchQuery)
@@ -89,9 +109,13 @@ struct ContentView: View {
         .environmentObject(sources)
         .environmentObject(downloads)
         .environmentObject(storage)
+        .environmentObject(repositories)
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { downloads.setForeground(false) }
-            else if phase == .active { downloads.setForeground(true) }
+            else if phase == .active {
+                downloads.setForeground(true)
+                Task { await repositories.checkForUpdates(force: false) }
+            }
         }
         .onOpenURL { url in
             // Files shared to the app ("用 Kototoro 打开") become local works; links add repositories.
@@ -118,15 +142,18 @@ struct ContentView: View {
             .environmentObject(sources)
             .environmentObject(downloads)
             .environmentObject(storage)
+            .environmentObject(repositories)
         }
         .task(id: library.library == nil) {
             guard let database = library.library else { return }
             await storage.prepare(queue: downloads)
             sources.attach(database)
+            repositories.attach(library: database, sources: sources)
             if let runtime = sources.runtime { downloads.attach(runtime: runtime) }
             await sources.load()
             await library.refresh()
             await storage.trimAutomatically()
+            await repositories.checkForUpdates(force: false)
         }
     }
 }

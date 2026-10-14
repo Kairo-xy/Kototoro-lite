@@ -6,6 +6,13 @@ import KototoroShared
 
 private struct ManagementResult: Decodable { let managementVersion: Int; let installed: [InstalledExtension] }
 
+struct BatchUpdateProgress: Equatable {
+    let completed: Int
+    let total: Int
+    let currentTitle: String
+    let failedCount: Int
+}
+
 @MainActor
 final class RepositoriesModel: ObservableObject {
     @Published private(set) var saved: [IosRepository] = []
@@ -18,11 +25,16 @@ final class RepositoriesModel: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var installed: [InstalledExtension] = [] { didSet { rebuildRows() } }
     @Published private(set) var rows: [ExtensionSummary] = []
+    @Published private(set) var updatesCount: Int = 0
+    @Published private(set) var batchProgress: BatchUpdateProgress?
     private(set) var repositoryRows: [String: [ExtensionSummary]] = [:]
     private var store: IosRepositories?
     private weak var sources: SourcesModel?
     private var displayMetadata = RepositoriesModel.readDisplayMetadata()
     private var hasInstalledSnapshot = false
+    private var batchCancelled = false
+    private static let lastCheckKey = "extensions.lastCheckTimestamp"
+    private static let checkInterval: TimeInterval = 12 * 3600
 
     static func key(_ repository: IosRepository) -> String { repository.kind + ":" + repository.url }
     static func key(_ catalog: IosRepositoryCatalog) -> String { catalog.kind + ":" + catalog.url }
@@ -45,6 +57,7 @@ final class RepositoriesModel: ObservableObject {
         repositoryRows = byRepository
         rows = ExtensionIndex.summaries(installed: installed, available: entries,
                                         activeID: activeID, metadata: displayMetadata)
+        updatesCount = rows.filter { $0.state == .update }.count
         let next = Dictionary(uniqueKeysWithValues: rows.filter { $0.installed != nil }.map { row in
             (row.id, ExtensionDisplayMetadata(title: row.title, languages: row.languages,
                                                sourceNames: row.sourceNames, iconURL: row.iconURL))
@@ -155,6 +168,33 @@ final class RepositoriesModel: ObservableObject {
               let item = catalog.extensions.first(where: { $0.id == row.packageName }) else { return }
         await install(item, catalog: catalog)
     }
+    private func performInstall(_ extensionItem: IosExtension, catalog: IosRepositoryCatalog) async throws {
+        guard let url = Self.resourceURL(extensionItem.url, catalog: catalog) else { throw URLError(.badURL) }
+        status = "正在下载 \(extensionItem.title)…"
+        // URLSession downloads to disk; do not buffer large APKs on the UI thread.
+        let (temp, response) = try await URLSession.shared.download(from: url)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
+        let size = try temp.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard size > 0 && size <= 128 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
+        let incoming = try NativeSourceTransport.dataDirectory.appendingPathComponent("incoming", isDirectory: true)
+        try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
+        let file = incoming.appendingPathComponent(UUID().uuidString + ".archive")
+        try FileManager.default.moveItem(at: temp, to: file)
+        defer { try? FileManager.default.removeItem(at: file) }
+        let hash = try await Task.detached { () throws -> String in
+            SHA256.hash(data: try Data(contentsOf: file, options: .mappedIfSafe)).map { String(format: "%02x", $0) }.joined()
+        }.value
+        // Android builds (APK or DEX-only plugin JAR) are converted to JVM bytecode on the device by the
+        // interpreter-only embedded JVM: large parser plugins take minutes, so say so and keep the app awake.
+        let megabytes = max(1, size / 1_048_576)
+        status = size > 1_048_576
+            ? "正在转换并安装 \(extensionItem.title)（\(megabytes) MB，请保持应用在前台）…"
+            : "正在转换、校验并安装 \(extensionItem.title)…"
+        try await manage(["managementVersion": 1, "operation": "install", "path": file.path,
+                          "sha256": hash, "packageName": extensionItem.id, "versionCode": extensionItem.versionCode,
+                          "ecosystem": catalog.kind])
+    }
+
     private func install(_ extensionItem: IosExtension, catalog: IosRepositoryCatalog) async {
         guard !NativeSourceTransport.isFixtureRuntime else {
             error = NativeSourceTransport.fixtureInstallationMessage
@@ -165,35 +205,83 @@ final class RepositoriesModel: ObservableObject {
         activeID = InstalledExtension.identity(ecosystem: catalog.kind, package: extensionItem.id)
         defer { busy = false; activeID = nil }
         do {
-            guard let url = Self.resourceURL(extensionItem.url, catalog: catalog) else { throw URLError(.badURL) }
-            status = "正在下载 \(extensionItem.title)…"
-            // URLSession downloads to disk; do not buffer large APKs on the UI thread.
-            let (temp, response) = try await URLSession.shared.download(from: url)
-            guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw URLError(.badServerResponse) }
-            let size = try temp.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard size > 0 && size <= 128 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
-            let incoming = try NativeSourceTransport.dataDirectory.appendingPathComponent("incoming", isDirectory: true)
-            try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
-            let file = incoming.appendingPathComponent(UUID().uuidString + ".archive")
-            try FileManager.default.moveItem(at: temp, to: file)
-            defer { try? FileManager.default.removeItem(at: file) }
-            let hash = try await Task.detached { () throws -> String in
-                SHA256.hash(data: try Data(contentsOf: file, options: .mappedIfSafe)).map { String(format: "%02x", $0) }.joined()
-            }.value
-            // Android builds (APK or DEX-only plugin JAR) are converted to JVM bytecode on the device by the
-            // interpreter-only embedded JVM: large parser plugins take minutes, so say so and keep the app awake.
-            let megabytes = max(1, size / 1_048_576)
-            status = size > 1_048_576
-                ? "正在转换并安装 \(extensionItem.title)（\(megabytes) MB，大型插件首次安装可能需要数分钟，请保持应用在前台）…"
-                : "正在转换、校验并安装 \(extensionItem.title)…"
             try await Self.keepingAwake {
-                try await manage(["managementVersion": 1, "operation": "install", "path": file.path,
-                                  "sha256": hash, "packageName": extensionItem.id, "versionCode": extensionItem.versionCode,
-                                  "ecosystem": catalog.kind])
+                try await performInstall(extensionItem, catalog: catalog)
             }
             try await sources?.runtime?.sourcesChanged(); await sources?.load()
             status = "\(extensionItem.title) 已安装"
         } catch { report(error) }
+    }
+
+    func cancelBatchUpdate() {
+        batchCancelled = true
+    }
+
+    func updateAll() async {
+        guard !busy && batchProgress == nil else { return }
+        let updates = rows.filter { $0.state == .update && $0.permitsInstallation }
+        guard !updates.isEmpty else { return }
+        guard !NativeSourceTransport.isFixtureRuntime else {
+            error = NativeSourceTransport.fixtureInstallationMessage
+            return
+        }
+        busy = true
+        error = nil
+        batchCancelled = false
+        var completed = 0
+        var failed = 0
+        var anySucceeded = false
+        batchProgress = BatchUpdateProgress(completed: 0, total: updates.count, currentTitle: updates.first?.title ?? "", failedCount: 0)
+
+        await Self.keepingAwake {
+            for (index, row) in updates.enumerated() {
+                if batchCancelled { break }
+                guard let candidate = row.available,
+                      let catalog = catalogs[candidate.repositoryID],
+                      let item = catalog.extensions.first(where: { $0.id == row.packageName }) else {
+                    failed += 1
+                    continue
+                }
+                batchProgress = BatchUpdateProgress(completed: completed, total: updates.count, currentTitle: row.title, failedCount: failed)
+                activeID = InstalledExtension.identity(ecosystem: catalog.kind, package: item.id)
+                do {
+                    try await performInstall(item, catalog: catalog)
+                    completed += 1
+                    anySucceeded = true
+                } catch {
+                    failed += 1
+                }
+            }
+        }
+        activeID = nil
+        if anySucceeded {
+            try? await sources?.runtime?.sourcesChanged()
+            await sources?.load()
+        }
+        busy = false
+        batchProgress = nil
+
+        if batchCancelled {
+            status = "已取消全部更新（已完成 \(completed) 个）"
+        } else if failed > 0 {
+            status = "更新完成：\(completed) 个成功，\(failed) 个失败"
+            UINotificationFeedbackGenerator().notificationOccurred(.warning)
+        } else {
+            status = "\(completed) 个扩展已全部更新完成"
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        }
+    }
+
+    func checkForUpdates(force: Bool = false) async -> Int {
+        guard !isRefreshing && !busy else { return updatesCount }
+        let now = Date().timeIntervalSince1970
+        let last = UserDefaults.standard.double(forKey: Self.lastCheckKey)
+        if !force && last > 0 && (now - last) < Self.checkInterval {
+            return updatesCount
+        }
+        await load()
+        UserDefaults.standard.set(now, forKey: Self.lastCheckKey)
+        return updatesCount
     }
     /// Long conversions must not be cut short by auto-lock; a background task covers a brief app switch.
     private static func keepingAwake<T>(_ work: () async throws -> T) async rethrows -> T {

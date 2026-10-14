@@ -5,7 +5,7 @@ import CryptoKit
 import ImageIO
 
 struct RepositoriesView: View {
-    @StateObject private var model = RepositoriesModel()
+    @EnvironmentObject private var model: RepositoriesModel
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var sources: SourcesModel
     @State private var tab = 0
@@ -15,6 +15,7 @@ struct RepositoriesView: View {
     @State private var importingFile = false
     @State private var selection: ExtensionSelection?
     @State private var removingRepository: IosRepository?
+    @State private var bannerDismissed = false
     @AppStorage("extensions.filter.languages") private var storedLanguages = Data()
     @AppStorage("extensions.filter.ecosystem") private var ecosystem = ""
     @AppStorage("extensions.filter.scope") private var scope = ExtensionScope.all
@@ -246,10 +247,86 @@ struct RepositoriesView: View {
             }
         }
         let updates = rows.filter { $0.state == .update }
+        if !updates.isEmpty && !bannerDismissed && model.batchProgress == nil {
+            Section {
+                HStack(spacing: 12) {
+                    Image(systemName: "arrow.triangle.2.circlepath.circle.fill")
+                        .font(.title2)
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("发现 \(updates.count) 个扩展可更新")
+                            .font(.subheadline.weight(.semibold))
+                        Text("建议更新到最新版本，以获得最佳解析与稳定体验")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button("全部更新") {
+                        Task { await model.updateAll() }
+                    }
+                    .buttonStyle(.glassProminent)
+                    .tint(.orange)
+                    .controlSize(.small)
+                    .disabled(model.busy || NativeSourceTransport.isFixtureRuntime)
+
+                    Button {
+                        withAnimation { bannerDismissed = true }
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.caption2.weight(.bold))
+                            .foregroundStyle(.secondary)
+                            .padding(6)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("忽略提示")
+                }
+                .padding(.vertical, 4)
+            }
+        }
+        if let progress = model.batchProgress {
+            Section {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text("正在批量更新 (\(progress.completed + 1)/\(progress.total))：\(progress.currentTitle)")
+                            .font(.subheadline.weight(.medium))
+                            .lineLimit(1)
+                        Spacer()
+                        Button("取消") { model.cancelBatchUpdate() }
+                            .font(.caption)
+                            .buttonStyle(.glass)
+                            .controlSize(.small)
+                    }
+                    ProgressView(value: Double(progress.completed), total: Double(progress.total))
+                        .tint(.orange)
+                }
+                .padding(.vertical, 4)
+            }
+        }
         if !updates.isEmpty {
             Section {
                 ForEach(updates) { extensionRow($0) }
-            } header: { Label("可更新 · \(updates.count)", systemImage: "arrow.triangle.2.circlepath").foregroundStyle(.orange) }
+            } header: {
+                HStack {
+                    Label("可更新 · \(updates.count)", systemImage: "arrow.triangle.2.circlepath")
+                        .foregroundStyle(.orange)
+                    Spacer()
+                    if model.batchProgress == nil {
+                        Button {
+                            Task { await model.updateAll() }
+                        } label: {
+                            Label("全部更新", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+                                .font(.caption.bold())
+                        }
+                        .buttonStyle(.glassProminent)
+                        .tint(.orange)
+                        .controlSize(.small)
+                        .disabled(model.busy || NativeSourceTransport.isFixtureRuntime)
+                        .accessibilityIdentifier("extension.updateAll")
+                    }
+                }
+            }
         }
         let installed = rows.filter { $0.installed != nil && $0.state != .update }
         if !installed.isEmpty {
@@ -492,6 +569,11 @@ private struct ExtensionRow: View {
             }.buttonStyle(.plain).accessibilityIdentifier("extension.details.\(row.id)")
             if row.state == .installing {
                 ProgressView().accessibilityLabel("正在安装 \(row.title)")
+            } else if model.batchProgress != nil && row.state == .update && model.activeID != row.id {
+                Text("等待中")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .frame(minWidth: 44, minHeight: 44)
             } else if row.state == .installed {
                 Menu {
                     Button("查看详情", systemImage: "info.circle", action: details)
