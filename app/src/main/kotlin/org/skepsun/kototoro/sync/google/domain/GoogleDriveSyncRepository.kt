@@ -90,6 +90,7 @@ class GoogleDriveSyncRepository @Inject constructor(
     private val tsundokuExtensionManager: Lazy<TsundokuExtensionManager>,
     private val cloudstreamRuntimeManager: Lazy<CloudstreamRuntimeManager>,
     private val settingsStore: SettingsSyncStore,
+    private val sourceStateModifiedStore: SourceStateModifiedStore,
 ) {
 
     val isSyncing = MutableStateFlow(false)
@@ -167,7 +168,9 @@ class GoogleDriveSyncRepository @Inject constructor(
             try {
                 val token = auth.requireAccessToken()
                 var failedCount = 0
-                api.findCurrentSyncFiles(token).ifEmpty { api.findWorkV2SyncFiles(token) }.forEach { file ->
+                val files = api.findCurrentSyncFiles(token).ifEmpty { api.findWorkV2SyncFiles(token) } +
+                    api.findSettingsSyncFiles(token)
+                files.distinctBy { it.id }.forEach { file ->
                     if (!deleteRemoteFileReporting(token, file.id)) {
                         failedCount++
                     }
@@ -751,7 +754,9 @@ class GoogleDriveSyncRepository @Inject constructor(
     }
 
     private suspend fun dumpSourceStates(): List<SyncSourceState> {
-        return database.getSourcesDao().findAll().map { SyncSourceState(it) }
+        val entities = database.getSourcesDao().findAll()
+        val modified = sourceStateModifiedStore.modifiedAt(entities, System.currentTimeMillis())
+        return entities.map { SyncSourceState(it, modified[it.source] ?: 0L) }
     }
 
     private suspend fun dumpJsonSources(): List<SyncJsonSource> {
@@ -900,6 +905,7 @@ class GoogleDriveSyncRepository @Inject constructor(
                         lastUsedAt = maxOf(existing.lastUsedAt, state.usedAt),
                     ),
                 )
+                sourceStateModifiedStore.recordApplied(state.source, state.isEnabled, state.isPinned, state.sortKey, state.modifiedAt)
             } else {
                 getSourcesDao().upsert(
                     MangaSourceEntity(
@@ -912,6 +918,7 @@ class GoogleDriveSyncRepository @Inject constructor(
                         cfState = CloudFlareHelper.PROTECTION_NOT_DETECTED,
                     ),
                 )
+                sourceStateModifiedStore.recordApplied(state.source, state.isEnabled, state.isPinned, state.sortKey, state.modifiedAt)
             }
         }
     }
