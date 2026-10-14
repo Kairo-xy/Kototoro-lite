@@ -344,6 +344,8 @@ class IosSourceContent internal constructor(internal val value: SourceContent) {
     val coverUrl: String? get() = (value.largeCoverUrl ?: value.coverUrl)?.takeIf(String::isNotBlank)
     val hasCover: Boolean get() = coverUrl != null
     val chapters: List<IosSourceChapter> get() = value.chapters.orEmpty().map(::IosSourceChapter)
+    /** Without building the chapter list (each [chapters] read maps and bridges every chapter). */
+    val chapterCount: Int get() = value.chapters?.size ?: 0
 
     fun adjacentChapter(chapter: IosSourceChapter, forward: Boolean): IosSourceChapter? =
         SourceChapterNavigation.adjacent(value.chapters.orEmpty(), chapter.value.id, forward)?.let(::IosSourceChapter)

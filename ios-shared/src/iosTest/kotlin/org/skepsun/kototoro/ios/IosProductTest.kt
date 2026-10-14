@@ -54,6 +54,26 @@ class IosProductTest {
     }
 
     @Test
+    fun storedDetailsReturnSavedChaptersForAListItem() = runBlocking {
+        withDatabase { path ->
+            val library = IosLibrary(path)
+            try {
+                library.updateSources(listOf(IosSource(source.name, "漫画源", source.locale, source.contentType, "extension")))
+                // Browse results carry no chapters; the details screen looks the work up by its identity.
+                val listed = IosSourceContent(content.copy(chapters = null))
+                assertNull(library.storedDetails(listed))
+                assertEquals(0, listed.chapterCount)
+                library.saveDetails(listed)
+                assertNull(library.storedDetails(listed), "a row without chapters is not usable details")
+                library.saveDetails(IosSourceContent(content))
+                val stored = assertNotNull(library.storedDetails(listed))
+                assertEquals(content.chapters, stored.value.chapters)
+                assertEquals(2, stored.chapterCount)
+            } finally { library.close() }
+        }
+    }
+
+    @Test
     fun updateChecksUseReadBranchAndClearUnreadCounter() = runBlocking {
         withDatabase { path ->
             val library = IosLibrary(path)

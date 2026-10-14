@@ -243,6 +243,16 @@ class IosLibrary {
     @Throws(Exception::class)
     suspend fun saveDetails(content: IosSourceContent) = records.save(content.value)
 
+    /**
+     * Details saved when this work was last opened (every details screen saves them), with their chapters; null when
+     * none were saved or they belong to another source. Lets a long list show before the source answers again.
+     */
+    @Throws(Exception::class)
+    suspend fun storedDetails(content: IosSourceContent): IosSourceContent? =
+        records.find(content.value.id)
+            ?.takeIf { it.source.name == content.value.source.name && !it.chapters.isNullOrEmpty() }
+            ?.let(::IosSourceContent)
+
     @Throws(Exception::class)
     suspend fun position(content: IosSourceContent): IosReadingPosition? {
         val history = records.progress(content.value.id) ?: return null

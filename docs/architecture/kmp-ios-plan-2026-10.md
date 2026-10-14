@@ -6012,3 +6012,29 @@ UI 回归（真实扩展预览）`testConvertedRealMihonApkRunsOnSimulator`、`t
   `testAniyomiEpisodePlays` 通过。`testJarNovelChapterText` 在同一时间的工作区构建中失败：录屏显示章节与插图已加载（分页小说
   阅读器加入浮动操作按钮的未提交改动），用例等待的 `novel.firstParagraph` 不再出现，与 Tsundoku 用例同因，需随阅读器改动更新用例。
   注意：多个会话共用同一模拟器会互相重装应用、终止进程并改写 `space.kind` 等偏好，UI 回归应独占模拟器或使用克隆设备。
+
+## 120. iOS 长章节列表：先显示已保存的列表，反射查找缓存（2026-10-14）
+
+**测量**：Tsundoku AllNovelFull（2166 章）在模拟器 Zero 上详情约 55 s。trace 显示扩展按每页 50 章串行请求 47 页，
+响应头约 0.5 s/页（约 26 s）；其余是解释执行的 CPU。Mac `-Xint` + JFR：工作线程中 jsoup 约 60% 采样，
+宿主 `MihonReflection` 的方法查找约 5.6%（每章多次反射调用，每次复制并扫描整个类层级的 declaredMethods）。
+翻页与 jsoup 都是扩展自身的行为，宿主不能改变；因此优化等待体验并去掉宿主自身的开销。
+
+- `MihonReflection` 按目标类（`ClassValue`，卸载扩展不受缓存牵连）缓存"方法名 + 参数运行时类型"的解析结果，
+  包括找不到的结果（`optional` 依赖它）。解析只取决于这些输入，行为与原来逐次查找一致。JFR 中查找采样 14 → 0。
+- 详情页先显示已有列表再向源请求：本会话已取过的详情（`DetailsCache`，24 部 LRU）、打开时带着章节的记录（作品库、
+  历史）、或上次打开时保存的详情（详情页每次都会 `saveDetails`；新增 `IosLibrary.storedDetails` 按作品 ID 读回，
+  来源不同或无章节时为 null）。请求期间列表可用，顶部显示"正在更新章节…"；完成后替换并保留所选线路/分支；
+  失败时保留列表并显示可重试的错误。"继续阅读"进入时用已保存的列表立即续读，不再等源返回。
+- 详情模型只在 details 变化时桥接一次章节数组；`IosSourceContent.chapters` 每次读取都会映射并桥接全部章节，
+  章节数、分支、线路和续读定位原先反复读取它。新增 `chapterCount` 供不构造列表的判断。
+- 首次打开仍需完整等待；把简介与章节拆成两个协议调用（Mihon 本有 getMangaDetails / getChapterList）可让首屏先出现，
+  涉及 core-source 协议与各端适配器，暂未实施。
+
+**验证**：`:source-host:test` 107 项（新增 `MihonReflectionTest` 3 项：重载按参数类型、null 不选原始类型、
+子类重写与父类 protected、缺失方法稳定为 null）；`:ios-shared:iosSimulatorArm64Test` 60 项（新增 storedDetails：
+未保存与无章节行为 null，保存后按列表项身份读回章节）。
+UI（真实扩展预览）新增 `SourceRuntimeTests.testReopenedLongChapterListShowsAtOnce` 通过：Tsundoku 作品重新打开时章节立即出现
+并显示"正在更新章节…"（后台刷新约 44 s），重启应用后由保存的详情约 2 s 出现；`testConvertedRealMihonApkRunsOnSimulator`、
+`testAniyomiEpisodePlays` 回归通过。另见：宿主按 `number` 排序章节，AllNovelFull 用 `(\d+)\D*$` 取标题末尾数字作章节号
+（"Wedding Night 1" 记为 1），使该源章节顺序错乱；与本节缓存无关，待定是否改为保留源顺序。

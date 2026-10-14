@@ -2,10 +2,36 @@ import Combine
 import KototoroShared
 import SwiftUI
 
+/// Details fetched this session, so reopening a work, or going back to it, shows its chapters at once while the
+/// source is asked again. Long lists come from many sequential page requests (a 2,000-chapter novel takes about a
+/// minute on the interpreter-only JVM), so waiting on every open is not acceptable.
+@MainActor
+enum DetailsCache {
+    private static var entries: [String: IosSourceContent] = [:]
+    private static var order: [String] = []
+    private static let limit = 24
+
+    private static func key(_ content: IosSourceContent) -> String { content.sourceName + "\n" + content.url }
+
+    static func get(_ content: IosSourceContent) -> IosSourceContent? { entries[key(content)] }
+
+    static func put(_ content: IosSourceContent) {
+        let key = key(content)
+        order.removeAll { $0 == key }
+        order.append(key)
+        entries[key] = content
+        while order.count > limit { entries[order.removeFirst()] = nil }
+    }
+}
+
 /// Both child screens borrow the browsing session; leaving a screen must not close the process VM.
 @MainActor
 final class SourceDetailsModel: ObservableObject {
-    @Published private(set) var details: IosSourceContent?
+    @Published private(set) var details: IosSourceContent? {
+        didSet { chapters = details?.chapters ?? [] }
+    }
+    /// Bridged once per details: every `IosSourceContent.chapters` read maps the whole list again.
+    private(set) var chapters: [IosSourceChapter] = []
     @Published private(set) var error: String?
     /// The last failure was a browser challenge (Cloudflare): the error offers the in-app browser.
     @Published private(set) var challenge: IosChallenge?
@@ -14,6 +40,8 @@ final class SourceDetailsModel: ObservableObject {
     let runtime: IosSources
     let content: IosSourceContent
     private var detailsRequest: UUID?
+    /// The shown details came from the source in this screen, not from the cache or the saved record.
+    private var fetched = false
 
     init(runtime: IosSources, content: IosSourceContent) {
         self.runtime = runtime
@@ -25,11 +53,11 @@ final class SourceDetailsModel: ObservableObject {
     /// Translation branches in source order (manga/novels); a single unnamed branch is one nil entry.
     var branches: [String?] {
         var seen = Set<String?>()
-        return (details?.chapters ?? []).map(\.branch).filter { seen.insert($0).inserted }
+        return chapters.map(\.branch).filter { seen.insert($0).inserted }
     }
 
     func chapterList(query: String, newestFirst: Bool) -> [IosSourceChapter] {
-        var chapters = details?.chapters ?? []
+        var chapters = self.chapters
         if branches.count > 1 { chapters = chapters.filter { $0.branch == selectedBranch } }
         let text = query.trimmingCharacters(in: .whitespaces)
         if !text.isEmpty { chapters = chapters.filter { $0.title.localizedCaseInsensitiveContains(text) } }
@@ -39,8 +67,8 @@ final class SourceDetailsModel: ObservableObject {
     func refresh() async {
         do {
             let result = try await runtime.refreshDetails(content: details ?? content)
-            details = result; error = nil; challenge = nil
-            if !branches.contains(selectedBranch) { selectedBranch = branches.first ?? nil }
+            apply(result); fetched = true; error = nil; challenge = nil
+            DetailsCache.put(result)
         } catch { if !Task.isCancelled { fail(error) } }
     }
 
@@ -56,18 +84,35 @@ final class SourceDetailsModel: ObservableObject {
     /// Playback lines in source order; a single unnamed line is represented by one nil entry.
     var lines: [String?] {
         var seen = Set<String?>()
-        return (details?.chapters ?? []).map(\.line).filter { seen.insert($0).inserted }
+        return chapters.map(\.line).filter { seen.insert($0).inserted }
     }
 
     var visibleChapters: [IosSourceChapter] {
-        let chapters = details?.chapters ?? []
         guard isVideo, lines.count > 1 else { return chapters }
         let line = selectedLine ?? lines.first ?? nil
         return chapters.filter { $0.line == line }
     }
 
+    /// Shows this session's details, the record the screen was opened with (library, history) or the details saved
+    /// when the work was last opened, before [load] asks the source; the fresh list replaces it when it arrives.
+    func showCached(stored library: IosLibrary?) async {
+        guard details == nil else { return }
+        if let cached = DetailsCache.get(content) ?? (content.chapterCount > 0 ? content : nil) {
+            apply(cached)
+        } else if let library, let saved = try? await library.storedDetails(content: content), details == nil {
+            apply(saved)
+        }
+    }
+
+    /// Keeps the chosen line and branch when they still exist.
+    private func apply(_ result: IosSourceContent) {
+        details = result
+        if !lines.contains(selectedLine) { selectedLine = lines.first ?? nil }
+        if !branches.contains(selectedBranch) { selectedBranch = branches.first ?? nil }
+    }
+
     func load() async {
-        guard !isLoading, details == nil || error != nil else { return }
+        guard !isLoading, !fetched || error != nil else { return }
         let request = UUID()
         detailsRequest = request
         isLoading = true
@@ -77,18 +122,13 @@ final class SourceDetailsModel: ObservableObject {
             let result = try await runtime.details(content: content)
             try Task.checkCancellation()
             if detailsRequest == request {
-                details = result
-                selectedLine = lines.first ?? nil
-                selectedBranch = branches.first ?? nil
+                apply(result)
+                fetched = true
+                DetailsCache.put(result)
             }
         } catch {
-            if !Task.isCancelled, detailsRequest == request {
-                fail(error)
-                // Saved full details retain their chapters for offline reading.
-                if !content.chapters.isEmpty {
-                    details = content; selectedLine = lines.first ?? nil; selectedBranch = branches.first ?? nil
-                }
-            }
+            // A shown cached or saved list stays (offline reading); the error offers a retry above it.
+            if !Task.isCancelled, detailsRequest == request { fail(error) }
         }
     }
 }
@@ -119,12 +159,25 @@ struct SourceDetailsView: View {
         self.autoResume = autoResume
     }
 
+    private func resumeIfAsked() {
+        guard autoResume, !resumed, let details = model.details,
+              let target = resumeChapter() ?? model.chapters.first else { return }
+        resumed = true
+        if model.isVideo { playing = PlaybackRequest(content: details, chapter: target) }
+        else { reading = PlaybackRequest(content: details, chapter: target) }
+    }
+
     var body: some View {
         List {
             header
             if let recordError { Text(recordError).foregroundStyle(.red) }
             if model.isLoading && model.details == nil {
                 ProgressView("正在读取详情…").frame(maxWidth: .infinity).listRowBackground(Color.clear)
+            } else if model.isLoading {
+                // A cached or saved list is already shown and usable; the source is being asked again.
+                Label { Text("正在更新章节…") } icon: { ProgressView() }
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("details.updating")
             }
             if let error = model.error {
                 Section {
@@ -156,16 +209,17 @@ struct SourceDetailsView: View {
         .navigationTitle(panorama && scrollOffset < 220 ? "" : model.content.title)
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            // Continuing from the library or history needs no fresh list: resume from the saved one at once.
+            await model.showCached(stored: library.library)
+            if model.details != nil {
+                await refreshRecords()
+                resumeIfAsked()
+            }
             await sources.recordUsage(sourceName: model.content.sourceName)
             await model.load()
             await refreshRecords()
             await sources.refreshSettings()
-            if autoResume, !resumed, let details = model.details,
-               let target = resumeChapter(details) ?? details.chapters.first {
-                resumed = true
-                if model.isVideo { playing = PlaybackRequest(content: details, chapter: target) }
-                else { reading = PlaybackRequest(content: details, chapter: target) }
-            }
+            resumeIfAsked()
         }
         .refreshable { await model.refresh(); await refreshRecords(); await sources.refreshSettings() }
         .toolbar {
@@ -214,7 +268,7 @@ struct SourceDetailsView: View {
             isFavourite = try await database.isFavourite(content: content).boolValue
             resume = try await database.position(content: content)
             // Open the chapter list on the branch being read.
-            if let chapter = resumeChapter(content), model.branches.contains(chapter.branch) { model.selectedBranch = chapter.branch }
+            if let chapter = resumeChapter(), model.branches.contains(chapter.branch) { model.selectedBranch = chapter.branch }
         } catch { recordError = error.localizedDescription }
     }
 
@@ -251,7 +305,7 @@ struct SourceDetailsView: View {
                             }
                             if model.details != nil {
                                 // Video lines repeat the same episodes; count the shown line only.
-                                let count = model.isVideo ? model.visibleChapters.count : model.details?.chapters.count ?? 0
+                                let count = model.isVideo ? model.visibleChapters.count : model.chapters.count
                                 pill(model.isVideo ? "\(count) 集" : "\(count) 章", tint: .secondary)
                             }
                         }
@@ -311,8 +365,8 @@ struct SourceDetailsView: View {
     @ViewBuilder
     private func actions(_ shown: IosSourceContent) -> some View {
         HStack(spacing: 12) {
-            if let details = model.details, let target = resumeChapter(details) ?? details.chapters.first {
-                let resuming = resumeChapter(details) != nil
+            if let details = model.details, let target = resumeChapter() ?? model.chapters.first {
+                let resuming = resumeChapter() != nil
                 let title = resuming ? (model.isVideo ? "继续播放" : "继续阅读") : (model.isVideo ? "开始播放" : "开始阅读")
                 Group {
                     if model.isVideo {
@@ -371,9 +425,9 @@ struct SourceDetailsView: View {
             .background(tint.opacity(0.15), in: .capsule)
     }
 
-    private func resumeChapter(_ details: IosSourceContent) -> IosSourceChapter? {
+    private func resumeChapter() -> IosSourceChapter? {
         guard let resume else { return nil }
-        return details.chapters.first { $0.id == resume.chapterId }
+        return model.chapters.first { $0.id == resume.chapterId }
     }
 
     static func stateTitle(_ state: String) -> String {
@@ -400,7 +454,7 @@ struct SourceDetailsView: View {
     @ViewBuilder
     private func episodes(_ details: IosSourceContent) -> some View {
         Section {
-            if details.chapters.isEmpty { Text("暂无可播放的剧集").accessibilityIdentifier("details.empty") }
+            if model.chapters.isEmpty { Text("暂无可播放的剧集").accessibilityIdentifier("details.empty") }
             if model.lines.count > 1 {
                 if model.lines.count <= 3 {
                     linePicker.pickerStyle(.segmented)
@@ -457,10 +511,10 @@ struct SourceDetailsView: View {
     private func chapters(_ details: IosSourceContent) -> some View {
         let branches = model.branches
         let visible = model.chapterList(query: chapterQuery, newestFirst: newestFirst)
-        let current = resumeChapter(details)
-        let currentIndex = current.flatMap { chapter in details.chapters.firstIndex { $0.id == chapter.id } }
+        let current = resumeChapter()
+        let currentIndex = current.flatMap { chapter in model.chapters.firstIndex { $0.id == chapter.id } }
         Section {
-            if details.chapters.count > 20 {
+            if model.chapters.count > 20 {
                 TextField("搜索章节", text: $chapterQuery).textFieldStyle(.roundedBorder)
                     .listRowSeparator(.hidden)
             }
@@ -472,7 +526,7 @@ struct SourceDetailsView: View {
             }
             if visible.isEmpty { Text("暂无章节").foregroundStyle(.secondary).accessibilityIdentifier("details.empty") }
             ForEach(visible, id: \.id) { chapter in
-                let index = details.chapters.firstIndex { $0.id == chapter.id }
+                let index = model.chapters.firstIndex { $0.id == chapter.id }
                 let isCurrent = chapter.id == current?.id
                 let isRead = !isCurrent && index != nil && currentIndex != nil && index! < currentIndex!
                 NavigationLink {
@@ -503,7 +557,7 @@ struct SourceDetailsView: View {
             }
         } header: {
             HStack {
-                Text("章节（\(details.chapters.count)）")
+                Text("章节（\(model.chapters.count)）")
                 Spacer()
                 Button(newestFirst ? "最新在前" : "最早在前", systemImage: "arrow.up.arrow.down") {
                     withAnimation { newestFirst.toggle() }

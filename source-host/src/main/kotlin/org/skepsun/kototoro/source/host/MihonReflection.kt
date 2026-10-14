@@ -3,6 +3,7 @@ package org.skepsun.kototoro.source.host
 import kotlinx.coroutines.suspendCancellableCoroutine
 import java.lang.reflect.InvocationTargetException
 import java.lang.reflect.Method
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.Continuation
 import kotlin.coroutines.intrinsics.COROUTINE_SUSPENDED
@@ -99,7 +100,29 @@ internal object MihonReflection {
         }
     }
 
+    /**
+     * Resolved methods per target class, keyed by name and the arguments' runtime classes (resolution depends on
+     * nothing else). Each lookup otherwise copies and scans declaredMethods up the hierarchy, which the
+     * interpreter-only iOS JVM paid several times per chapter of a long list. A ClassValue lets an unloaded
+     * extension's classes go with their entries.
+     */
+    private val resolved = object : ClassValue<ConcurrentHashMap<List<Any>, Any>>() {
+        override fun computeValue(type: Class<*>) = ConcurrentHashMap<List<Any>, Any>()
+    }
+    private object NullArgument
+    private object NotFound
+
     private fun method(target: Any, name: String, arguments: Array<out Any?>): Method {
+        val key = ArrayList<Any>(arguments.size + 1)
+        key.add(name)
+        for (argument in arguments) key.add(argument?.javaClass ?: NullArgument)
+        val found = resolved.get(target.javaClass).getOrPut(key) {
+            try { lookup(target, name, arguments) } catch (_: NoSuchMethodException) { NotFound }
+        }
+        return found as? Method ?: throw NoSuchMethodException(name)
+    }
+
+    private fun lookup(target: Any, name: String, arguments: Array<out Any?>): Method {
         // Walk overrides first, including protected HttpSource.imageRequest used to obtain page headers.
         var type: Class<*>? = target.javaClass
         while (type != null) {

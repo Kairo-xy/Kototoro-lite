@@ -370,6 +370,56 @@ final class SourceRuntimeTests: XCTestCase {
         add(screenshot)
     }
 
+    /// AllNovelFull lists ~2,000 chapters through dozens of sequential page requests (about a minute on the
+    /// interpreter-only JVM). Reopening the work, in this session or after a relaunch, shows the saved list at once
+    /// while the source is asked again.
+    @MainActor
+    func testReopenedLongChapterListShowsAtOnce() throws {
+        let app = XCUIApplication()
+        let source = "TSUNDOKU_3273374795580060030"
+        func openFirstWork() -> XCUIElement {
+            app.tabBars.buttons["浏览"].tap()
+            let search = app.pageSearchField()
+            XCTAssertTrue(search.waitForExistence(timeout: 30))
+            search.tap()
+            search.typeText(source)
+            let row = app.buttons["source.\(source)"]
+            XCTAssertTrue(row.waitForExistence(timeout: 90), "Source missing: \(app.debugDescription)")
+            row.tap()
+            let work = app.descendants(matching: .any).matching(
+                NSPredicate(format: "identifier BEGINSWITH %@", "source.content.")).firstMatch
+            XCTAssertTrue(work.waitForExistence(timeout: 90), "Browse failed: \(app.debugDescription)")
+            work.tap()
+            return work
+        }
+        app.launch()
+        app.tabBars.buttons["浏览"].tap()
+        if !app.staticTexts["sources.extensionRuntime"].waitForExistence(timeout: 15) ||
+            app.staticTexts["独立测试源，仅用于运行时验证"].exists {
+            throw XCTSkip("Select the real extension preview profile to run this test")
+        }
+        let work = openFirstWork()
+        XCTAssertTrue(revealChapter(in: app, timeout: 180).exists, "First load failed: \(app.debugDescription)")
+        XCTAssertTrue(app.descendants(matching: .any)["details.updating"].waitForNonExistence(timeout: 180))
+
+        // Back and in again: this session's details, while the source is asked again.
+        app.navigationBars.buttons["BackButton"].firstMatch.tap()
+        XCTAssertTrue(work.waitForExistence(timeout: 10))
+        work.tap()
+        XCTAssertTrue(revealChapter(in: app, timeout: 10).exists, "Session cache: \(app.debugDescription)")
+        XCTAssertTrue(app.descendants(matching: .any)["details.updating"].exists, "The refresh should still run")
+        let shown = XCTAttachment(screenshot: app.screenshot())
+        shown.name = "Saved chapters while updating"
+        shown.lifetime = .keepAlways
+        add(shown)
+
+        // After a relaunch: the details saved when the work was last opened.
+        app.terminate()
+        app.launch()
+        _ = openFirstWork()
+        XCTAssertTrue(revealChapter(in: app, timeout: 15).exists, "Saved details: \(app.debugDescription)")
+    }
+
     /// Browse results are poster cards (buttons); match by label regardless of element type.
     private func item(_ app: XCUIApplication, _ label: String) -> XCUIElement {
         app.descendants(matching: .any).matching(NSPredicate(format: "label CONTAINS %@", label)).firstMatch
