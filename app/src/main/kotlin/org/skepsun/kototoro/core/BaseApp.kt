@@ -93,8 +93,8 @@ open class BaseApp : App(), Configuration.Provider, SingletonImageLoader.Factory
                 entryPoint.localStorageChanges().collect(entryPoint.localContentIndexProvider().get())
             }
         }
-        // Dagger grafigi (zamanlayicilar, scrobbler depolari, eklenti yoneticileri) ana is parcaciginda
-        // kurulunca acilis ve arayuz yavasliyordu; hepsi arka planda baslatilir.
+        // Building this part of the Dagger graph (schedulers, scrobbler storages, extension managers)
+        // on the main thread slowed down startup and the UI, so it is all initialized in the background.
         processLifecycleScope.launch(Dispatchers.Default) {
             try {
                 entryPoint.workScheduleManager().init()
