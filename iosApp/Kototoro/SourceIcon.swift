@@ -62,6 +62,7 @@ final class SourceIconStore {
         .appendingPathComponent("source-icons", isDirectory: true)
     /// A failed lookup is retried after a week, not on every appearance of the row.
     private static let retryInterval: TimeInterval = 7 * 24 * 3600
+    func clearMemory() { memory.removeAll() }
 
     func cached(_ name: String) -> UIImage? {
         if let image = memory[name] { return image }
@@ -77,17 +78,19 @@ final class SourceIconStore {
         if failedAt > 0, Date().timeIntervalSince1970 - failedAt < Self.retryInterval { return nil }
         if let running = inFlight[name] { return await running.value }
         let task = Task<UIImage?, Never> { [weak self] in
-            // Favicons are image requests like covers and share their bounded concurrency.
-            guard await RequestGate.covers.enter() else { return nil }
-            defer { Task { await RequestGate.covers.leave() } }
-            guard let homepage = try? await runtime.homepage(sourceName: name),
-                  let base = URL(string: homepage), base.host() != nil else { return nil }
-            let image = await Self.fetch(base)
-            if let image, let data = image.pngData(), let file = self?.file(name) {
-                try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try? data.write(to: file, options: .atomic)
+            try? await withReaderStorage { () async throws -> UIImage? in
+                // Favicons are image requests like covers and share their bounded concurrency.
+                guard await RequestGate.covers.enter() else { return nil }
+                defer { Task { await RequestGate.covers.leave() } }
+                guard let homepage = try? await runtime.homepage(sourceName: name),
+                      let base = URL(string: homepage), base.host() != nil else { return nil }
+                let image = await Self.fetch(base)
+                if let image, let data = image.pngData(), let file = self?.file(name) {
+                    try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+                    try? data.write(to: file, options: .atomic)
+                }
+                return image
             }
-            return image
         }
         inFlight[name] = task
         let image = await task.value

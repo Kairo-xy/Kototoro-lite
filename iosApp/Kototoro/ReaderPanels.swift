@@ -4,6 +4,7 @@ import SwiftUI
 struct ReaderChapterPanel: View {
     @ObservedObject var model: SourceReaderModel
     @EnvironmentObject private var downloads: ReaderDownloadQueue
+    @EnvironmentObject private var storage: ReaderStorageModel
     let onJump: (Int) -> Void
     let onChapter: (IosSourceChapter) -> Void
     let onBookmark: (IosBookmark) -> Void
@@ -173,10 +174,9 @@ struct ReaderChapterPanel: View {
                         busy = false
                         return
                     }
-                    if let entry = downloads.entry(content: model.content, chapter: chapter) {
-                        try downloads.remove(entry.id)
-                    }
-                    try ReaderDownloads.remove(content: model.content, chapter: chapter)
+                    try await storage.removeDirectory(
+                        ReaderStorageMetadata.directoryID(contentID: model.content.id, chapterID: chapter.id)
+                    )
                     done += 1
                 }
                 status = "完成 \(done) 章"

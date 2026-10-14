@@ -9,8 +9,7 @@ enum ReaderDownloads {
     private typealias Manifest = ReaderDownloadStore.Manifest
     static func directory(content: IosSourceContent, chapter: IosSourceChapter) throws -> URL {
         let root = try NativeSourceTransport.dataDirectory.appendingPathComponent("downloads", isDirectory: true)
-        let identity = content.id + ":" + chapter.id
-        let hash = SHA256.hash(data: Data(identity.utf8)).map { String(format: "%02x", $0) }.joined()
+        let hash = ReaderStorageMetadata.directoryID(contentID: content.id, chapterID: chapter.id)
         return root.appendingPathComponent(hash, isDirectory: true)
     }
     static func isDownloaded(content: IosSourceContent, chapter: IosSourceChapter) -> Bool {
@@ -144,10 +143,6 @@ enum ReaderDownloads {
         let value = Manifest(pages: archive, images: records)
         try await ReaderDownloadStore.shared.write(value, in: dir)
     }
-    static func remove(content: IosSourceContent, chapter: IosSourceChapter) throws {
-        let dir = try directory(content: content, chapter: chapter)
-        if FileManager.default.fileExists(atPath: dir.path) { try FileManager.default.removeItem(at: dir) }
-    }
 }
 
 extension ReaderDownloadQueue {
@@ -161,8 +156,11 @@ extension ReaderDownloadQueue {
             let decoded = try IosDownloadArchive().decode(json: request.payload)
             guard decoded.content.sourceName == request.source, decoded.content.id == request.contentID,
                   decoded.chapter.id == request.chapterID else { throw URLError(.cannotParseResponse) }
-            try await ReaderDownloads.download(runtime: runtime, content: decoded.content,
-                                               chapter: decoded.chapter, progress: progress)
+            try await withReaderStorage {
+                try await ReaderStorageModel.downloadStore().record(request.storageMetadata)
+                try await ReaderDownloads.download(runtime: runtime, content: decoded.content,
+                                                   chapter: decoded.chapter, progress: progress)
+            }
         }
     }
 

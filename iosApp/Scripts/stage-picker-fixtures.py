@@ -9,6 +9,8 @@
   * fixture_reader_window.cbz — bounded paging windows across three chapters.
   * fixture_reader_paged.cbz — longer chapters for page-by-page drags across a chapter boundary.
   * fixture_reader_zoom.cbz — red/green/blue thirds, to see where a paged double tap zooms.
+  * fixture_storage_comic.cbz / fixture_storage_tasks.cbz — cache cleanup and offline file ownership.
+  * fixture_novel_controls.txt — long chapters for novel controls, paging and floating action preferences.
 
 Usage: stage-picker-fixtures.py <simulator id> (ffmpeg is required for the local video fixture)
 """
@@ -103,6 +105,13 @@ for storage in storages:
     with zipfile.ZipFile(os.path.join(storage, "fixture_reader_download.cbz"), "w") as archive:
         archive.writestr("001.png", png(300, 420, (200, 60, 60)))
         archive.writestr("002.png", png(300, 420, (60, 60, 200)))
+    with zipfile.ZipFile(os.path.join(storage, "fixture_storage_comic.cbz"), "w") as archive:
+        archive.writestr("01/001.png", png(600, 900, (210, 70, 40)))
+        archive.writestr("01/002.png", png(600, 900, (40, 90, 210)))
+        archive.writestr("02/001.png", png(600, 900, (50, 180, 90)))
+    with zipfile.ZipFile(os.path.join(storage, "fixture_storage_tasks.cbz"), "w") as archive:
+        archive.writestr("01/001.png", png(600, 900, (160, 80, 170)))
+        archive.writestr("01/002.png", png(600, 900, (70, 140, 150)))
     with zipfile.ZipFile(os.path.join(storage, "fixture_reader_horizontal.cbz"), "w") as archive:
         archive.writestr("001.png", png(1800, 600, (200, 60, 60)))
         archive.writestr("002.png", png(900, 600, (60, 60, 200)))
@@ -124,4 +133,9 @@ for storage in storages:
         archive.writestr("002.png", png(600, 900, (90, 90, 90)))
     with open(os.path.join(storage, "fixture_novel.txt"), "wb") as file:
         file.write(novel.encode("gb18030"))
+    with open(os.path.join(storage, "fixture_novel_controls.txt"), "w", encoding="utf-8") as file:
+        for chapter in range(1, 3):
+            file.write(f"第{chapter}章 阅读控件\n")
+            for paragraph in range(1, 41):
+                file.write(f"第{paragraph}段，晨光落在书页上，读者沿着文字继续前行。" * 5 + "\n\n")
     print(storage)

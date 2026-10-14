@@ -216,18 +216,27 @@ final class ExtensionEcosystemTests: XCTestCase {
     }
 
     private func assertNovelDownloadReadsOffline(source: String, search: String?) throws {
+        if app.buttons["space.menu"].exists {
+            app.buttons["space.menu"].tap()
+            XCTAssertTrue(app.buttons["space.select.NOVEL"].waitForExistence(timeout: 10))
+            app.buttons["space.select.NOVEL"].tap()
+        }
         openFirstItem(source: source, search: search)
+        XCTAssertTrue(app.staticTexts["details.title"].waitForExistence(timeout: 30))
+        let title = app.staticTexts["details.title"].label
         openFirstChapter()
         let paragraph = element("novel.firstParagraph")
         waitForEither(paragraph, element("novel.error"), timeout: 90)
         XCTAssertTrue(paragraph.exists, "Novel text failed: \(app.debugDescription)")
-        // Toolbar menus do not carry their identifier; find the download menu by its title.
-        let menu = app.navigationBars.buttons["下载"]
+        app.buttons["novel.more"].tap()
+        // Menus do not carry their identifier; find the download menu by its title.
+        let menu = app.buttons["下载"]
         XCTAssertTrue(menu.waitForExistence(timeout: 5), app.debugDescription)
         menu.tap()
         let current = app.buttons["下载本章"]
         XCTAssertTrue(current.waitForExistence(timeout: 5), app.debugDescription)
         if current.isEnabled { current.tap() } else { menu.tap() } // already downloaded by an earlier run
+        app.buttons["novel.panel.close"].tap()
 
         // The chapter list marks the chapter once its text and pictures are saved.
         let downloaded = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label CONTAINS %@",
@@ -248,11 +257,24 @@ final class ExtensionEcosystemTests: XCTestCase {
         // The reader covers the tab bar's continue-reading accessory.
         XCTAssertFalse(app.buttons["continueReading"].isHittable, "The accessory should hide in the reader")
         // Reopening the chapter reads the saved copy.
-        app.navigationBars.buttons["BackButton"].firstMatch.tap()
+        app.buttons["novel.back"].tap()
         openFirstChapter()
         XCTAssertTrue(element("novel.offline").waitForExistence(timeout: 30), app.debugDescription)
         XCTAssertTrue(element("novel.firstParagraph").exists)
         attach("\(source) novel read offline")
+        app.buttons["novel.more"].tap()
+        app.buttons["novel.downloads"].tap()
+        XCTAssertTrue(app.buttons["downloads.storage"].waitForExistence(timeout: 15))
+        app.buttons["downloads.storage"].tap()
+        let stored = app.otherElements.matching(NSPredicate(
+            format: "identifier BEGINSWITH %@ AND label CONTAINS %@", "storage.chapter.", title
+        )).firstMatch
+        for _ in 0..<8 where !stored.exists { app.swipeUp() }
+        XCTAssertTrue(stored.exists, app.debugDescription)
+        let delete = stored.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "storage.delete.")).firstMatch
+        XCTAssertTrue(delete.exists)
+        XCTAssertFalse(delete.isEnabled, "The open novel chapter must remain protected")
+        attach("\(source) novel offline storage protected")
     }
 
     /// The root pages search in place with the system field under the title (not the search tab's global field):

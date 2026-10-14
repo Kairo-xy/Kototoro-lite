@@ -75,6 +75,12 @@ final class NovelReaderModel: ObservableObject {
     var next: IosSourceChapter? { content.adjacentChapter(chapter: chapter, forward: true) }
     var isBookmarked: Bool { bookmarks.contains { $0.chapterId == chapter.id && Int($0.index) == visibleIndex } }
 
+    /// Shared history stores progress in 1/10,000 units; the controls display a normalized fraction.
+    var progress: Double {
+        let units = pagedScroll ?? document?.scroll(index: Int32(visibleIndex)) ?? 0
+        return units.isFinite ? min(1, max(0, Double(units) / 10_000)) : 0
+    }
+
     func load() async {
         let request = UUID()
         self.request = request
@@ -132,11 +138,28 @@ final class NovelReaderModel: ObservableObject {
 
     func jump(to target: Int) async {
         guard blocks.indices.contains(target) else { return }
+        seek(to: target)
+        saveTask?.cancel()
+        await persist()
+    }
+
+    /// Update the reading target immediately, including accessibility slider adjustments; debounce disk writes.
+    func seek(to target: Int) {
+        guard blocks.indices.contains(target) else { return }
         resumeIndex = target
         visibleIndex = target
+        visibleIndices = []
         pagedScroll = nil
         self.target = NovelReadingTarget(block: target, scroll: 0, atEnd: false)
-        await persist()
+        saveTask?.cancel()
+        saveTask = Task { try? await Task.sleep(for: .milliseconds(600)); if !Task.isCancelled { await persist() } }
+    }
+
+    /// The shared document locates the paragraph at the requested chapter percentage.
+    func seek(progress: Double) {
+        guard let document else { return }
+        let units = Float(min(1, max(0, progress)) * 10_000)
+        seek(to: Int(document.index(scroll: units, index: 0)))
     }
 
     /// The chapter laid out for the paged reader with the current paragraph settings.
@@ -215,10 +238,41 @@ final class NovelReaderModel: ObservableObject {
     }
 }
 
+private enum NovelReaderAction: String, CaseIterable, Identifiable {
+    case bookmark, chapters, typography, downloads
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .bookmark: "书签"
+        case .chapters: "目录与书签"
+        case .typography: "阅读设置"
+        case .downloads: "下载队列"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .bookmark: "bookmark"
+        case .chapters: "list.bullet"
+        case .typography: "textformat.size"
+        case .downloads: "arrow.down.circle"
+        }
+    }
+    static func selected(_ raw: String) -> [Self] {
+        let ids = Set(raw.split(separator: ",").map(String.init))
+        return allCases.filter { ids.contains($0.rawValue) }
+    }
+}
+
 struct NovelReaderView: View {
+    private enum ReaderSheet: String, Identifiable {
+        case chapters, settings, downloads
+        var id: String { rawValue }
+    }
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var downloads: ReaderDownloadQueue
+    @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @StateObject private var model: NovelReaderModel
     @AppStorage(NovelStyle.Key.mode) private var mode = NovelStyle.Default.mode
     @AppStorage(NovelStyle.Key.theme) private var theme = NovelStyle.Default.theme
@@ -231,12 +285,15 @@ struct NovelReaderView: View {
     @AppStorage(NovelStyle.Key.marginVertical) private var marginVertical = NovelStyle.Default.margin
     @AppStorage(NovelStyle.Key.bookStyles) private var bookStyles = true
     @AppStorage(NovelStyle.Key.pageTurn) private var pageTurn = "SLIDE"
-    @State private var showingSheet = false
-    @State private var showingSettings = false
+    @AppStorage(NovelStyle.Key.floatingActions) private var floatingActions = "bookmark"
+    @State private var activeSheet: ReaderSheet?
     @State private var sheetTab = 0
-    @State private var showingDownloads = false
     @State private var downloadError: String?
     @State private var chromeHidden = false
+    @State private var showingMore = false
+    @State private var moreTab = 0
+    @State private var scrubPosition: Double?
+    @State private var isScrubbing = false
 
     init(runtime: IosSources, content: IosSourceContent, chapter: IosSourceChapter) {
         _model = StateObject(wrappedValue: NovelReaderModel(runtime: runtime, content: content, chapter: chapter))
@@ -253,37 +310,33 @@ struct NovelReaderView: View {
 
     var body: some View {
         let style = style
-        Group {
-            if isPaged && !model.blocks.isEmpty && model.error == nil {
-                NovelPagedReader(model: model, style: style) { chromeHidden.toggle() }
-            } else {
-                scrollReader(style)
+        GeometryReader { geometry in
+            ZStack {
+                if isPaged && !model.blocks.isEmpty && model.error == nil {
+                    NovelPagedReader(model: model, style: style, onToggleChrome: toggleChrome)
+                } else {
+                    scrollReader(style)
+                        .ignoresSafeArea(edges: .bottom)
+                        .simultaneousGesture(SpatialTapGesture().onEnded { tap in
+                            if tap.location.x > geometry.size.width / 3,
+                               tap.location.x < geometry.size.width * 2 / 3,
+                               tap.location.y > geometry.size.height / 3,
+                               tap.location.y < geometry.size.height * 2 / 3 { toggleChrome() }
+                        })
+                }
+                if !chromeHidden { chrome(height: geometry.size.height).transition(.opacity) }
             }
         }
         .background(style.colors.background.ignoresSafeArea())
-        .navigationTitle(model.content.title)
-        .navigationBarTitleDisplayMode(.inline)
-        .toolbar(.hidden, for: .tabBar)
-        .toolbar(isPaged && chromeHidden ? .hidden : .visible, for: .navigationBar)
-        .statusBarHidden(isPaged && chromeHidden)
-        .toolbar {
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                Button(model.isBookmarked ? "取消书签" : "添加书签",
-                       systemImage: model.isBookmarked ? "bookmark.fill" : "bookmark") {
-                    Task { await model.toggleBookmark() }
-                }
-                .disabled(model.blocks.isEmpty)
-                .accessibilityIdentifier("novel.bookmark")
-                Button("目录与书签", systemImage: "list.bullet") { showingSheet = true }
-                    .accessibilityIdentifier("novel.chapters")
-                // Imported files are already on the device.
-                if !model.runtime.isLocal(content: model.content) { downloadMenu }
-                Button("阅读设置", systemImage: "textformat.size") { showingSettings = true }
-                    .accessibilityIdentifier("novel.typography")
+        .toolbar(.hidden, for: .navigationBar, .tabBar)
+        .statusBarHidden(chromeHidden)
+        .sheet(item: $activeSheet) { sheet in
+            switch sheet {
+            case .chapters: navigationSheet
+            case .settings: NovelReaderSettingsSheet()
+            case .downloads: ReaderDownloadsSheet()
             }
         }
-        .sheet(isPresented: $showingSheet) { navigationSheet }
-        .sheet(isPresented: $showingSettings) { NovelReaderSettingsSheet() }
         .alert("无法下载", isPresented: Binding(get: { downloadError != nil }, set: { if !$0 { downloadError = nil } })) {
             Button("好") { downloadError = nil }
         } message: { Text(downloadError ?? "") }
@@ -292,7 +345,158 @@ struct NovelReaderView: View {
             await model.load()
         }
         .onDisappear { Task { await model.persist(); await library.refresh() } }
-        .readerPresence()
+        .onChange(of: model.chapter.id) { _, _ in showingMore = false; scrubPosition = nil; isScrubbing = false }
+        .readerPresence(directories: [
+            ReaderStorageMetadata.directoryID(contentID: model.content.id, chapterID: model.chapter.id)
+        ])
+    }
+
+    private func toggleChrome() {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.18)) {
+            chromeHidden.toggle()
+            showingMore = false
+        }
+    }
+
+    private func perform(_ action: NovelReaderAction) {
+        switch action {
+        case .bookmark: Task { await model.toggleBookmark() }
+        case .chapters: showingMore = false; activeSheet = .chapters
+        case .typography: showingMore = false; activeSheet = .settings
+        case .downloads: showingMore = false; activeSheet = .downloads
+        }
+    }
+
+    private func chrome(height: CGFloat) -> some View {
+        GlassEffectContainer(spacing: 8) {
+            VStack(spacing: 12) {
+                if showingMore {
+                    morePanel.frame(maxHeight: min(400, max(100, height - 88)))
+                } else {
+                    HStack {
+                        Button("返回", systemImage: "chevron.left") { dismiss() }
+                            .labelStyle(.iconOnly).buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large)
+                            .frame(width: 44, height: 44).accessibilityIdentifier("novel.back")
+                        Spacer(minLength: 16)
+                        Button { perform(.chapters) } label: {
+                            Label(model.chapter.title, systemImage: "list.bullet").font(.subheadline).lineLimit(1)
+                                .padding(.horizontal, 14).padding(.vertical, 12)
+                        }.buttonStyle(.plain).glassEffect(.regular.interactive(), in: .capsule)
+                            .accessibilityIdentifier("novel.chapters")
+                        Spacer(minLength: 16)
+                        Button { moreTab = 0; showingMore = true } label: {
+                            Image(systemName: "ellipsis").frame(width: 44, height: 44)
+                        }.buttonStyle(.plain).glassEffect(.regular.interactive(), in: .circle)
+                            .accessibilityLabel("更多").accessibilityIdentifier("novel.more")
+                    }
+                }
+                Spacer(minLength: 0)
+                let actions = NovelReaderAction.selected(floatingActions)
+                if !showingMore && !actions.isEmpty {
+                    HStack(spacing: 12) {
+                        Spacer()
+                        ForEach(actions) { action in
+                            Button { perform(action) } label: {
+                                Image(systemName: action == .bookmark && model.isBookmarked ? "bookmark.fill" : action.symbol)
+                                    .frame(width: 44, height: 44)
+                            }.buttonStyle(.plain).glassEffect(.regular.tint(.accentColor).interactive(), in: .circle)
+                                .disabled(action == .bookmark && (model.blocks.isEmpty || model.isLoading))
+                                .accessibilityLabel(action.title)
+                                .accessibilityValue(action == .bookmark ? (model.isBookmarked ? "已添加" : "未添加") : "")
+                                .accessibilityIdentifier("novel.floating.\(action.rawValue)")
+                        }
+                    }
+                }
+                progressControl
+            }.padding(12)
+        }
+    }
+
+    private var progressControl: some View {
+        HStack(spacing: 20) {
+            Button("上一章", systemImage: "backward.end.fill") {
+                if let previous = model.previous { Task { await model.move(to: previous) } }
+            }.labelStyle(.iconOnly).buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large)
+                .frame(width: 44, height: 44).disabled(model.previous == nil || model.isLoading)
+                .accessibilityIdentifier("novel.previousChapter")
+            HStack(spacing: 8) {
+                let position = scrubPosition ?? model.progress
+                Text("\(Int((position * 100).rounded()))%")
+                    .font(.caption.monospacedDigit()).fixedSize()
+                Slider(value: Binding(
+                    get: { isScrubbing ? (scrubPosition ?? model.progress) : model.progress },
+                    set: { value in
+                        if isScrubbing { scrubPosition = value }
+                        model.seek(progress: value)
+                    }
+                ), in: 0...1, onEditingChanged: { editing in
+                    isScrubbing = editing
+                    if !editing {
+                        scrubPosition = nil
+                        Task { await model.persist() }
+                    }
+                }).disabled(model.blocks.count <= 1 || model.isLoading)
+                    .accessibilityLabel("章节进度")
+                    .accessibilityValue("\(Int((position * 100).rounded()))%")
+                    .accessibilityIdentifier("novel.progress")
+            }.padding(.horizontal, 14).frame(height: 44).glassEffect(.regular, in: .capsule)
+            Button("下一章", systemImage: "forward.end.fill") {
+                if let next = model.next { Task { await model.move(to: next) } }
+            }.labelStyle(.iconOnly).buttonStyle(.glass).buttonBorderShape(.circle).controlSize(.large)
+                .frame(width: 44, height: 44).disabled(model.next == nil || model.isLoading)
+                .accessibilityIdentifier("novel.nextChapter")
+        }
+    }
+
+    private var morePanel: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("更多").font(.headline)
+                Spacer()
+                Button("收起", systemImage: "xmark") { showingMore = false }
+                    .labelStyle(.iconOnly).buttonStyle(.borderless).accessibilityIdentifier("novel.panel.close")
+            }.padding(16)
+            Divider()
+            Picker("内容", selection: $moreTab) {
+                Text("快捷").tag(0); Text("控件").tag(1)
+            }.pickerStyle(.segmented).padding(12)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    if moreTab == 0 {
+                        Text(model.content.title).font(.subheadline).foregroundStyle(.secondary)
+                        Button(model.isBookmarked ? "取消书签" : "添加书签",
+                               systemImage: model.isBookmarked ? "bookmark.fill" : "bookmark") { perform(.bookmark) }
+                            .disabled(model.blocks.isEmpty || model.isLoading)
+                            .accessibilityIdentifier("novel.bookmark")
+                        Button("阅读设置", systemImage: "textformat.size") { perform(.typography) }
+                            .accessibilityIdentifier("novel.typography")
+                        // Imported files are already on the device.
+                        if !model.runtime.isLocal(content: model.content) {
+                            downloadMenu
+                            if let status = downloadStatus { Text(status).font(.caption).foregroundStyle(.secondary) }
+                        }
+                        Button("下载队列", systemImage: "arrow.down.circle") { perform(.downloads) }
+                            .accessibilityIdentifier("novel.downloads")
+                    } else {
+                        ForEach(NovelReaderAction.allCases) { action in
+                            Toggle(action.title, isOn: Binding(
+                                get: { NovelReaderAction.selected(floatingActions).contains(action) },
+                                set: { enabled in
+                                    var selected = Set(NovelReaderAction.selected(floatingActions))
+                                    if enabled { selected.insert(action) } else { selected.remove(action) }
+                                    floatingActions = NovelReaderAction.allCases.filter { selected.contains($0) }
+                                        .map(\.rawValue).joined(separator: ",")
+                                }
+                            )).accessibilityIdentifier("novel.floating.option.\(action.rawValue)")
+                        }
+                        Text("所选悬浮按钮显示在进度条上方，随阅读控件一起收起。可全部关闭，设置自动保存。")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }.padding(16).frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }.glassEffect(.regular, in: .rect(cornerRadius: 28))
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("novel.morePanel")
     }
 
     /// One line of the scrolling reader, with the book's alignment, heading size and emphasis when enabled.
@@ -363,10 +567,9 @@ struct NovelReaderView: View {
                             model.visible(index, isVisible: visible)
                         }
                     }
-                    if !model.blocks.isEmpty { chapterButtons }
                 }
                 .padding(.horizontal, style.marginHorizontal)
-                .padding(.vertical, 12)
+                .padding(.vertical, style.marginVertical)
             }
             .onChange(of: model.target) { _, target in
                 if target.block == 0 && !target.atEnd { proxy.scrollTo("top", anchor: .top) }
@@ -390,13 +593,10 @@ struct NovelReaderView: View {
                 }
                 .accessibilityIdentifier("novel.download.all")
             }
-            Button("下载队列", systemImage: "list.bullet.rectangle") { showingDownloads = true }
-                .accessibilityIdentifier("novel.downloads")
         } label: {
             Label("下载", systemImage: "arrow.down.circle")
         }
         .accessibilityIdentifier("novel.download")
-        .sheet(isPresented: $showingDownloads) { ReaderDownloadsSheet() }
     }
 
     private var downloadStatus: String? {
@@ -432,7 +632,7 @@ struct NovelReaderView: View {
                 if sheetTab == 0 {
                     List(model.content.chapters, id: \.id) { item in
                         Button {
-                            showingSheet = false
+                            activeSheet = nil
                             Task { await model.move(to: item) }
                         } label: {
                             HStack {
@@ -459,7 +659,7 @@ struct NovelReaderView: View {
                     List {
                         ForEach(model.bookmarks, id: \.id) { bookmark in
                             Button {
-                                showingSheet = false
+                                activeSheet = nil
                                 Task {
                                     if bookmark.chapterId != model.chapter.id,
                                        let target = model.content.chapters.first(where: { $0.id == bookmark.chapterId }) {
@@ -484,33 +684,11 @@ struct NovelReaderView: View {
             }
             .navigationTitle("目录与书签")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { showingSheet = false } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("关闭") { activeSheet = nil } } }
         }
         .presentationDetents([.medium, .large])
     }
 
-    private var chapterButtons: some View {
-        GlassEffectContainer(spacing: 12) {
-            HStack {
-                if let previous = model.previous {
-                    Button("上一章", systemImage: "chevron.left") {
-                        Task { await model.move(to: previous) }
-                    }
-                    .buttonStyle(.glass)
-                    .accessibilityIdentifier("novel.previousChapter")
-                }
-                Spacer()
-                if let next = model.next {
-                    Button("下一章", systemImage: "chevron.right") {
-                        Task { await model.move(to: next) }
-                    }
-                    .buttonStyle(.glassProminent)
-                    .accessibilityIdentifier("novel.nextChapter")
-                }
-            }
-        }
-        .padding(.vertical, 24)
-    }
 }
 
 /// An illustration loaded with the headers the source requires (most novel sites check the Referer).
@@ -597,6 +775,7 @@ struct NovelStyle: Equatable {
         static let marginVertical = "novel.reader.marginVertical"
         static let bookStyles = "novel.reader.bookStyles"
         static let pageTurn = "novel.reader.pageTurn"
+        static let floatingActions = "novel.reader.floatingActions"
     }
 
     enum Default {
@@ -888,8 +1067,6 @@ struct NovelPagedReader: View {
     @State private var cutout = UIEdgeInsets.zero
     /// Increases with every new layout, so the pager drops pages it built from the previous one.
     @State private var layoutVersion = 0
-    private static let footerHeight: CGFloat = 24
-
     private struct LayoutKey: Equatable {
         let revision: Int
         let style: NovelStyle
@@ -900,7 +1077,7 @@ struct NovelPagedReader: View {
         GeometryReader { geometry in
             let insets = cutout
             let content = CGSize(width: geometry.size.width - insets.left - insets.right - 2 * style.marginHorizontal,
-                                 height: geometry.size.height - insets.top - 2 * style.marginVertical - Self.footerHeight)
+                                 height: geometry.size.height - insets.top - 2 * style.marginVertical)
             NovelPager(count: pages.count, current: $current, curl: style.pageTurn == "SIMULATION",
                        version: layoutVersion, background: style.colors.uiBackground,
                        page: { index in
@@ -960,18 +1137,23 @@ struct NovelPagedReader: View {
                         .frame(width: content.width, height: content.height)
                 }
             }
-            .padding(.top, style.marginVertical)
-            Spacer(minLength: 0)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, style.marginVertical)
+        .overlay(alignment: .bottom) {
+            // The footer belongs to the configured lower margin, not a second inset taken from the text.
+            // Small margins keep a smaller footer instead of overlapping the last line.
             HStack {
                 Text(model.chapter.title).lineLimit(1)
                 Spacer()
                 Text("\(index + 1) / \(pages.count)").monospacedDigit()
             }
-            .font(.caption2)
+            .font(.system(size: min(11, style.marginVertical * 0.75)))
             .foregroundStyle(style.colors.secondaryText)
-            .frame(height: Self.footerHeight)
+            .frame(height: style.marginVertical)
             .padding(.horizontal, style.marginHorizontal)
-            .padding(.bottom, style.marginVertical / 2)
+            .accessibilityElement(children: .combine)
+            .accessibilityIdentifier("novel.footer")
         }
     }
 

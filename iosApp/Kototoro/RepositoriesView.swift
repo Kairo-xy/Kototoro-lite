@@ -436,6 +436,10 @@ private struct ExtensionIcon: View {
 
 private enum ExtensionIconLoader {
     static func load(_ url: URL) async -> UIImage? {
+        try? await withReaderStorage { await loadOwned(url) }
+    }
+
+    private static func loadOwned(_ url: URL) async -> UIImage? {
         let key = SHA256.hash(data: Data(url.absoluteString.utf8)).map { String(format: "%02x", $0) }.joined()
         let directory = URL.cachesDirectory.appendingPathComponent("extension-icons", isDirectory: true)
         let file = directory.appendingPathComponent(key)

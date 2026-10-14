@@ -99,22 +99,34 @@ private struct ContinueReadingPresentation: ViewModifier {
 final class ReaderPresence {
     static let shared = ReaderPresence()
     private(set) var visibleReaders = 0
+    private var protectedDirectories: [UUID: Set<String>] = [:]
     var isReading: Bool { visibleReaders > 0 }
     func appear() { visibleReaders += 1 }
-    func disappear() { visibleReaders = max(0, visibleReaders - 1) }
+    func disappear() {
+        visibleReaders = max(0, visibleReaders - 1)
+        Task { await ReaderStorageAccess.shared.requestIdleAction() }
+    }
+    func protect(_ directories: Set<String>, owner: UUID) { protectedDirectories[owner] = directories }
+    func release(_ owner: UUID) { protectedDirectories[owner] = nil }
+    func protects(_ directory: String) -> Bool { protectedDirectories.values.contains { $0.contains(directory) } }
 }
 
 private struct ReaderPresenceModifier: ViewModifier {
+    let directories: Set<String>
+    @State private var owner = UUID()
     func body(content: Content) -> some View {
         content
-            .onAppear { ReaderPresence.shared.appear() }
-            .onDisappear { ReaderPresence.shared.disappear() }
+            .onAppear { ReaderPresence.shared.appear(); ReaderPresence.shared.protect(directories, owner: owner) }
+            .onChange(of: directories) { _, value in ReaderPresence.shared.protect(value, owner: owner) }
+            .onDisappear { ReaderPresence.shared.disappear(); ReaderPresence.shared.release(owner) }
     }
 }
 
 extension View {
     /// Marks a full-screen reading surface (manga, novel or video) while it is on screen.
-    func readerPresence() -> some View { modifier(ReaderPresenceModifier()) }
+    func readerPresence(directories: Set<String> = []) -> some View {
+        modifier(ReaderPresenceModifier(directories: directories))
+    }
 
     /// One resume presentation shared by the tab accessory and the space panel.
     func continueReadingPresentation(opened: Binding<CategoryContent?>) -> some View {

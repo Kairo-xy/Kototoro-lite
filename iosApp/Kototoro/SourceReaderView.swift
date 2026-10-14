@@ -17,6 +17,11 @@ final class SourceReaderModel: ObservableObject {
     @Published private(set) var windowRevision = 0
     @Published private(set) var sceneRevision = 0
     private var window: [IosReaderPage] = []
+    var storageDirectories: Set<String> {
+        Set((window.map(\.chapterId) + [chapter.id]).map {
+            ReaderStorageMetadata.directoryID(contentID: content.id, chapterID: $0)
+        })
+    }
     private var windowPages: [IosSourcePage] = []
     private var chapterPages: [String: [IosSourcePage]] = [:]
     private var chapterPreloads: [String: ChapterPreload] = [:]
@@ -308,7 +313,11 @@ final class SourceReaderModel: ObservableObject {
         let runtime = runtime, gate = pageGate
         let ticket = RequestGate.makeTicket()
         let priority = isPrefetch ? ReaderLoading.prefetchPriority : ReaderLoading.visiblePriority
-        let task = Task { try await gated(gate, priority: priority, ticket: ticket) { try await runtime.image(page: page) } }
+        let task = Task {
+            try await withReaderStorage {
+                try await gated(gate, priority: priority, ticket: ticket) { try await runtime.image(page: page) }
+            }
+        }
         let fetch = PageFetch(task: task, ticket: ticket, isPrefetch: isPrefetch)
         Task { [weak self] in
             let succeeded = (try? await task.value) != nil
@@ -857,9 +866,11 @@ struct SourceReaderView: View {
     private var downloading: Bool { downloadEntry?.state == .running || downloadEntry?.state == .queued }
     private var currentDownloadStatus: String? {
         if let downloadStatus { return downloadStatus }
+        if ReaderDownloads.isDownloaded(content: model.content, chapter: model.chapter) {
+            return "本章已下载，可离线阅读"
+        }
         if downloadEntry?.state == .completed {
-            return ReaderDownloads.isDownloaded(content: model.content, chapter: model.chapter)
-                ? "本章已下载，可离线阅读" : "下载文件不完整，可重新下载本章"
+            return "下载文件不完整，可重新下载本章"
         }
         return downloadEntry?.status
     }
@@ -993,7 +1004,7 @@ struct SourceReaderView: View {
             model.stopPreloading()
             Task { await model.persist(); await library.refresh(); await ReaderTileBaseCache.shared.clear() }
         }
-        .readerPresence()
+        .readerPresence(directories: model.storageDirectories)
         .sheet(isPresented: $showingDownloads) { ReaderDownloadsSheet() }
         .fileExporter(isPresented: $exporting, document: export, contentType: .png,
                       defaultFilename: "\(model.content.title)-\(model.index + 1)") { result in

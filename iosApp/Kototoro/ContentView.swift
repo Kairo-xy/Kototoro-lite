@@ -5,6 +5,7 @@ struct ContentView: View {
     private enum MainTab: Hashable { case library, browse, records, settings, search }
     @ObservedObject var library: LibraryModel
     @StateObject private var sources = SourcesModel()
+    @StateObject private var storage = ReaderStorageModel()
     @StateObject private var downloads = ReaderDownloadQueue(
         file: NativeSourceTransport.downloadQueueFile
     )
@@ -43,6 +44,8 @@ struct ContentView: View {
                             .accessibilityIdentifier("settings.backup")
                     }
                     Section("本地存储") {
+                        NavigationLink { ReaderStorageView() } label: { Label("存储管理", systemImage: "internaldrive") }
+                            .accessibilityIdentifier("settings.storage")
                         if let version = library.schemaVersion {
                             LabeledContent("数据库版本", value: "\(version)")
                                 .accessibilityIdentifier("database.ready")
@@ -85,6 +88,7 @@ struct ContentView: View {
         .environmentObject(library)
         .environmentObject(sources)
         .environmentObject(downloads)
+        .environmentObject(storage)
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { downloads.setForeground(false) }
             else if phase == .active { downloads.setForeground(true) }
@@ -113,13 +117,16 @@ struct ContentView: View {
             .environmentObject(library)
             .environmentObject(sources)
             .environmentObject(downloads)
+            .environmentObject(storage)
         }
         .task(id: library.library == nil) {
             guard let database = library.library else { return }
+            await storage.prepare(queue: downloads)
             sources.attach(database)
             if let runtime = sources.runtime { downloads.attach(runtime: runtime) }
             await sources.load()
             await library.refresh()
+            await storage.trimAutomatically()
         }
     }
 }

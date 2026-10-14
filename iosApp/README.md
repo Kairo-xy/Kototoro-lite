@@ -282,9 +282,27 @@ python3 "iosApp/Scripts/serve-repository-fixture.py"
 漫画下载使用应用级持久化队列：设置 → 下载，或阅读器的章节／更多 → 下载队列可暂停、继续和重试。
 退出阅读器后前台任务继续；进入后台暂停，进程中断的任务重启后等待手动继续。
 每页保存检查点，继续时校验已有图片，整章完成后发布离线清单；移除任务保留已下载文件。
+设置 → 存储管理（下载队列内也可进入）分别显示漫画/小说离线章节与页面、封面、来源/扩展图标缓存。
+章节名称由下载时的轻量元数据保留，移除任务后仍可管理；旧版无关联目录按日期和占用显示。
+删除离线章节保留本地导入作品、收藏与进度；清除缓存保留离线章节。当前阅读窗口与实际未结束的
+下载/图片请求会阻止冲突清理。整章删除先暂存，队列写入失败则回滚；重启恢复未提交操作，
+已提交但未清理完的文件显示待清理占用并在下次启动重试。
+缓存上限默认 512 MiB，可选 256/512/1024/2048 MiB 或不限；文件空闲时按修改时间清理较旧文件。
+统计为这些文件的逻辑字节数，未包含数据库、导入文件、HTTP 缓存、运行时和安装包；该上限为软预算。
+定向回归：`ReaderStorageTests` 验证真实文件/队列回滚与恢复、符号链接、小说离线元数据及请求隔离；
+`LocalImportTests` 的三个 `testStorage…` 用例验证清理/删除/重开、移除任务后管理与阅读保护/上限持久化。
 队列回归：`-only-testing:KototoroUITests/ReaderDownloadQueueTests`，测试实际生产队列的串行性、迟到回调、
 重启／失败恢复与文件写入失败。源请求已进入 JNI 后仍须等源超时或请求结束，当前暂停为页面边界上的协作取消。
 这些证据为 Apple Silicon 模拟器验证，不代表真机／发布包已验收。
+
+小说阅读控件采用与漫画相同的分布：上方返回／章节目录／更多，下方章节切换和进度。
+“更多 → 快捷”打开书签、排版、下载等操作；“更多 → 控件”配置四种悬浮按钮，可全部关闭，重启保留。
+点击正文中央收起／显示控件；分页文本不会因此重新排版。
+“上下边距”作用于正文布局区域，上方另外避让挖孔，页脚位于下边距内，不额外扣减正文高度；
+默认 36 pt。字形末行下方的剩余空白取决于实际行高，不能作为设定值的测量边界。
+定向 UI 回归：`LocalImportTests/testNovelFloatingActionsPersistAndOperateFromTheMorePanel`、
+`testNovelPagedChromeHidesWithoutChangingTheDisplayedText`、`testNovelPagedTextMarginsAreSymmetricAndContainTheFooter`。
+夹具由 `stage-picker-fixtures.py` 生成；边距用例测量实际布局坐标，不依赖写死的挖孔尺寸。
 
 详情、章节与页对象在 Kotlin 内保留完整 `SourceContent` / `SourceChapter` / `SourcePage`，包括 opaque
 字段和原生页面索引；Swift 不重建请求模型。翻章复用 `SourceChapterNavigation` 的来源/分支规则。

@@ -7,6 +7,10 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		FE0000000000000000000001 /* ReaderStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0000000000000000000001 /* ReaderStorage.swift */; };
+		FE0000000000000000000002 /* ReaderStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0000000000000000000001 /* ReaderStorage.swift */; };
+		FE0000000000000000000003 /* ReaderStorageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0000000000000000000002 /* ReaderStorageView.swift */; };
+		FE0000000000000000000004 /* ReaderStorageTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0000000000000000000003 /* ReaderStorageTests.swift */; };
 		FC0000000000000000000001 /* ReaderDownloadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0000000000000000000001 /* ReaderDownloadStore.swift */; };
 		FC0000000000000000000002 /* ReaderDownloadStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0000000000000000000001 /* ReaderDownloadStore.swift */; };
 		FC0000000000000000000003 /* ReaderDownloadStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD0000000000000000000002 /* ReaderDownloadStoreTests.swift */; };
@@ -83,6 +87,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		FF0000000000000000000001 /* ReaderStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderStorage.swift; sourceTree = "<group>"; };
+		FF0000000000000000000002 /* ReaderStorageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderStorageView.swift; sourceTree = "<group>"; };
+		FF0000000000000000000003 /* ReaderStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderStorageTests.swift; sourceTree = "<group>"; };
 		FD0000000000000000000001 /* ReaderDownloadStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderDownloadStore.swift; sourceTree = "<group>"; };
 		FD0000000000000000000002 /* ReaderDownloadStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderDownloadStoreTests.swift; sourceTree = "<group>"; };
 		FD0000000000000000000003 /* ReaderSettingsTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderSettingsTests.swift; sourceTree = "<group>"; };
@@ -176,6 +183,8 @@
 		A00000000000000000000021 /* Kototoro */ = {
 			isa = PBXGroup;
 			children = (
+				FF0000000000000000000001 /* ReaderStorage.swift */,
+				FF0000000000000000000002 /* ReaderStorageView.swift */,
 				F70000000000000000000001 /* Assets.xcassets */,
 				F80000000000000000000002 /* BackupView.swift */,
 				F80000000000000000000006 /* SourceIcon.swift */,
@@ -222,6 +231,7 @@
 		A00000000000000000000022 /* KototoroUITests */ = {
 			isa = PBXGroup;
 			children = (
+				FF0000000000000000000003 /* ReaderStorageTests.swift */,
 				F50000000000000000000004 /* RepositoryManagementTests.swift */,
 				F80000000000000000000004 /* BackupFlowTests.swift */,
 				F80000000000000000000021 /* LocalImportTests.swift */,
@@ -385,6 +395,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FE0000000000000000000001 /* ReaderStorage.swift in Sources */,
+				FE0000000000000000000003 /* ReaderStorageView.swift in Sources */,
 				F40000000000000000000001 /* RepositoriesModel.swift in Sources */,
 				F40000000000000000000002 /* ExtensionPresentation.swift in Sources */,
 				F20000000000000000000001 /* ReaderDownloadQueue.swift in Sources */,
@@ -431,6 +443,8 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FE0000000000000000000002 /* ReaderStorage.swift in Sources */,
+				FE0000000000000000000004 /* ReaderStorageTests.swift in Sources */,
 				F40000000000000000000005 /* RepositoryManagementTests.swift in Sources */,
 				F80000000000000000000003 /* BackupFlowTests.swift in Sources */,
 				F80000000000000000000020 /* LocalImportTests.swift in Sources */,

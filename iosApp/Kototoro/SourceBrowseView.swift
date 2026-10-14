@@ -445,15 +445,17 @@ struct CoverImage: View {
             loading[key]?.waiters += 1
         } else {
             task = Task<UIImage, Error> {
-                // Android's cover loader: at most eight downloads and three decodes at a time across the app.
-                // Extension covers use the source's own client in the JVM, outside its per-source call order.
-                if runtime.fetchesCovers(content: content) {
-                    let artifact = try await gated(RequestGate.covers) { try await runtime.cover(content: content) }
-                    return try await gated(RequestGate.coverDecoding) { try await artifact.decodedImage() }
+                try await withReaderStorage {
+                    // Android's cover loader: at most eight downloads and three decodes at a time across the app.
+                    // Extension covers use the source's own client in the JVM, outside its per-source call order.
+                    if runtime.fetchesCovers(content: content) {
+                        let artifact = try await gated(RequestGate.covers) { try await runtime.cover(content: content) }
+                        return try await gated(RequestGate.coverDecoding) { try await artifact.decodedImage() }
+                    }
+                    guard let url = content.coverUrl.flatMap(URL.init(string:)) else { throw URLError(.badURL) }
+                    let data = try await gated(RequestGate.covers) { try await CoverCache.download(url) }
+                    return try await gated(RequestGate.coverDecoding) { try await CoverCache.decode(data) }
                 }
-                guard let url = content.coverUrl.flatMap(URL.init(string:)) else { throw URLError(.badURL) }
-                let data = try await gated(RequestGate.covers) { try await CoverCache.download(url) }
-                return try await gated(RequestGate.coverDecoding) { try await CoverCache.decode(data) }
             }
             loading[key] = (task, 1)
         }
@@ -512,6 +514,7 @@ final class CoverCache: @unchecked Sendable {
 
     private func key(_ content: IosSourceContent) -> NSString { "\(content.sourceName)|\(content.id)" as NSString }
     func image(for content: IosSourceContent) -> UIImage? { cache.object(forKey: key(content)) }
+    func clear() { cache.removeAllObjects() }
     func store(_ image: UIImage, for content: IosSourceContent) {
         let cost = Int(image.size.width * image.size.height * image.scale * image.scale * 4)
         cache.setObject(image, forKey: key(content), cost: cost)

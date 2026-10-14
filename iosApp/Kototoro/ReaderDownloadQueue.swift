@@ -2,7 +2,7 @@ import Combine
 import CryptoKit
 import Foundation
 
-struct ReaderDownloadRequest: Codable, Equatable {
+struct ReaderDownloadRequest: Codable, Equatable, Sendable {
     let source: String
     let contentID: String
     let chapterID: String
@@ -13,6 +13,11 @@ struct ReaderDownloadRequest: Codable, Equatable {
     var mediaKind: String? = nil
 
     var isNovel: Bool { mediaKind == "NOVEL" }
+
+    var storageMetadata: ReaderStorageMetadata {
+        ReaderStorageMetadata(version: 1, source: source, contentID: contentID, chapterID: chapterID,
+                              title: title, chapterTitle: chapterTitle, mediaKind: mediaKind ?? "MANGA")
+    }
 
     var id: String {
         let identity = [source, contentID, chapterID].joined(separator: "\u{0}")
@@ -50,12 +55,14 @@ final class ReaderDownloadQueue: ObservableObject {
 
     @Published private(set) var entries: [ReaderDownloadEntry] = []
     @Published private(set) var error: String?
+    @Published private(set) var storageFailure: String?
     private let file: URL
     private var operation: Operation?
     private var worker: Task<Void, Never>?
-    private var activeID: String?
+    @Published private var activeID: String?
     private var foreground = true
     private var loadFailed = false
+    private var maintainingStorage = false
     private static let maximumBytes = 32 * 1024 * 1024
     private static let maximumEntries = 500
 
@@ -96,6 +103,7 @@ final class ReaderDownloadQueue: ObservableObject {
     }
 
     func enqueue(_ requests: [ReaderDownloadRequest]) throws {
+        guard !maintainingStorage else { throw ReaderStorageError.busy }
         var next = entries
         for request in requests {
             if let index = next.firstIndex(where: { $0.id == request.id }) {
@@ -110,6 +118,7 @@ final class ReaderDownloadQueue: ObservableObject {
     }
 
     func pause(_ id: String) throws {
+        guard !maintainingStorage else { throw ReaderStorageError.busy }
         try update(id) { entry in
             if entry.state == .queued || entry.state == .running { entry.state = .paused }
         }
@@ -117,6 +126,7 @@ final class ReaderDownloadQueue: ObservableObject {
     }
 
     func resume(_ id: String) throws {
+        guard !maintainingStorage else { throw ReaderStorageError.busy }
         try update(id) { entry in
             if entry.state == .paused || entry.state == .failed {
                 entry.state = .queued
@@ -128,14 +138,39 @@ final class ReaderDownloadQueue: ObservableObject {
 
     /// Remove only the task record; downloaded files remain available for offline reading.
     func remove(_ id: String) throws {
+        guard !maintainingStorage else { throw ReaderStorageError.busy }
         try commit(entries.filter { $0.id != id })
         if activeID == id { worker?.cancel() }
     }
 
     func isFinishing(_ id: String) -> Bool { activeID == id }
 
+    var hasActiveWorker: Bool { worker != nil }
+
+    func setStorageFailure(_ message: String?) { storageFailure = message; pump() }
+
+    /// Block new queue writers while files are staged and queue persistence is committed or rolled back.
+    func withStorageMaintenance<T>(_ body: () async throws -> T) async throws -> T {
+        guard worker == nil, !maintainingStorage else { throw ReaderStorageError.busy }
+        maintainingStorage = true
+        defer {
+            maintainingStorage = false
+            if foreground { pump() } else { setForeground(false) }
+        }
+        return try await body()
+    }
+
+    func removeStoredDirectory(_ id: String, committing: () async throws -> Void) async throws {
+        guard maintainingStorage else { throw ReaderStorageError.busy }
+        let previous = entries
+        try commit(entries.filter { $0.request.storageMetadata.directoryID != id })
+        do { try await committing() }
+        catch { try commit(previous); throw error }
+    }
+
     func setForeground(_ value: Bool) {
         foreground = value
+        if maintainingStorage { return }
         if value { pump(); return }
         do {
             var next = entries
@@ -166,13 +201,16 @@ final class ReaderDownloadQueue: ObservableObject {
     }
 
     private func pump() {
-        guard foreground, worker == nil, error == nil, let operation,
+        guard foreground, !maintainingStorage, storageFailure == nil, worker == nil, error == nil, let operation,
               let entry = entries.first(where: { $0.state == .queued }) else { return }
         do { try update(entry.id) { $0.state = .running } }
         catch { self.error = error.localizedDescription; return }
         activeID = entry.id
         worker = Task {
-            defer { worker = nil; activeID = nil; pump() }
+            defer {
+                worker = nil; activeID = nil; pump()
+                Task { await ReaderStorageAccess.shared.requestIdleAction() }
+            }
             do {
                 try Task.checkCancellation()
                 try await operation(entry.request) { completed, total in
