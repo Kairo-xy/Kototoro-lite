@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		AB0000000000000000000001 /* SourceChangeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000002 /* SourceChangeView.swift */; };
 		FE0000000000000000000001 /* ReaderStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0000000000000000000001 /* ReaderStorage.swift */; };
 		FE0000000000000000000002 /* ReaderStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0000000000000000000001 /* ReaderStorage.swift */; };
 		FE0000000000000000000003 /* ReaderStorageView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0000000000000000000002 /* ReaderStorageView.swift */; };
@@ -87,6 +88,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		AB0000000000000000000002 /* SourceChangeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceChangeView.swift; sourceTree = "<group>"; };
 		FF0000000000000000000001 /* ReaderStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderStorage.swift; sourceTree = "<group>"; };
 		FF0000000000000000000002 /* ReaderStorageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderStorageView.swift; sourceTree = "<group>"; };
 		FF0000000000000000000003 /* ReaderStorageTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderStorageTests.swift; sourceTree = "<group>"; };
@@ -217,6 +219,7 @@
 				F80000000000000000000023 /* ExtensionWebKit.swift */,
 				B00000000000000000000013 /* SourcesView.swift */,
 				C00000000000000000000011 /* SourceDetailsView.swift */,
+				AB0000000000000000000002 /* SourceChangeView.swift */,
 				C00000000000000000000012 /* SourceReaderView.swift */,
 				C00000000000000000000013 /* SourceImageFile.swift */,
 				C00000000000000000000014 /* SourceImageLoader.swift */,
@@ -430,6 +433,7 @@
 				F80000000000000000000022 /* ExtensionWebKit.swift in Sources */,
 				B00000000000000000000003 /* SourcesView.swift in Sources */,
 				C00000000000000000000001 /* SourceDetailsView.swift in Sources */,
+				AB0000000000000000000001 /* SourceChangeView.swift in Sources */,
 				C00000000000000000000002 /* SourceReaderView.swift in Sources */,
 				C00000000000000000000003 /* SourceImageFile.swift in Sources */,
 				C00000000000000000000004 /* SourceImageLoader.swift in Sources */,

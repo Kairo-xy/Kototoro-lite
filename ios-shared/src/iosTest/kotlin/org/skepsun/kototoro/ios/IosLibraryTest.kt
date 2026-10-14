@@ -4,6 +4,7 @@ package org.skepsun.kototoro.ios
 
 import kotlinx.coroutines.runBlocking
 import org.skepsun.kototoro.core.source.SourceContent
+import org.skepsun.kototoro.core.source.SourceChapter
 import org.skepsun.kototoro.core.source.SourceRef
 import platform.Foundation.NSFileManager
 import platform.Foundation.NSTemporaryDirectory
@@ -12,8 +13,103 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+import kotlin.test.assertNull
 
 class IosLibraryTest {
+    private fun migrationWork(id: Long, name: String, numbers: List<Float>, type: String = "NOVEL"): IosSourceContent {
+        val source = SourceRef(name, "zh", type)
+        return IosSourceContent(SourceContent(id, "换源测试", emptySet(), "/$id", "https://fixture.invalid/$id",
+            0f, null, null, emptySet(), null, emptySet(), source, chapters = numbers.mapIndexed { index, number ->
+                SourceChapter(id * 10 + index, "第 $number 章", number, 1, "/$id/$index", null, 0, null, source)
+            }))
+    }
+
+    @Test
+    fun sourceReplacementMapsProgressAndCategoriesAndPreservesOriginalBookmarksAfterReopening() = runBlocking {
+        val directory = NSTemporaryDirectory() + NSUUID().UUIDString
+        val files = NSFileManager.defaultManager
+        check(files.createDirectoryAtPath(directory, true, null, null))
+        val old = migrationWork(201, "OLD", listOf(1f, 2f, 3f))
+        val target = migrationWork(202, "NEW", listOf(2f, 3f))
+        try {
+            val library = IosLibrary("$directory/library.db")
+            try {
+                library.addCategory("在读")
+                library.setCategories(old, listOf(library.categories().single().id))
+                library.recordPosition(old, old.chapters[1], 2, 10, 2000f)
+                library.toggleNovelBookmark(old, old.chapters[1], 2, 10, "原作品书签")
+                library.changeSource(old, target, false)
+                assertFalse(library.isFavourite(old))
+                assertNull(library.position(old))
+                assertEquals(target.chapters[0].id, library.position(target)?.chapterId)
+                assertEquals(2000f, library.position(target)?.scroll)
+                assertEquals("原作品书签", library.bookmarks(old).single().preview)
+            } finally { library.close() }
+            val reopened = IosLibrary("$directory/library.db")
+            try {
+                assertEquals(target.id, reopened.favourites().single().content.id)
+                assertEquals(target.id, reopened.history().single().content.id)
+                assertEquals(1, reopened.favouriteCategories(target).size)
+                assertEquals(1, reopened.bookmarks(old).size)
+                assertEquals(3, reopened.storedDetails(old)?.chapterCount)
+            } finally { reopened.close() }
+        } finally { files.removeItemAtPath(directory, null) }
+    }
+
+    @Test
+    fun sourceCopyMergesCategoriesAndRetainsTargetsNewerProgress() = runBlocking {
+        val directory = NSTemporaryDirectory() + NSUUID().UUIDString
+        val files = NSFileManager.defaultManager
+        check(files.createDirectoryAtPath(directory, true, null, null))
+        try {
+            val library = IosLibrary("$directory/library.db")
+            try {
+                val old = migrationWork(301, "OLD", listOf(1f, 2f, 3f))
+                val target = migrationWork(302, "NEW", listOf(1f, 2f))
+                library.addCategory("原分类"); library.addCategory("目标分类")
+                val ids = library.categories().map { it.id }
+                library.setCategories(old, listOf(ids[0])); library.setCategories(target, listOf(ids[1]))
+                library.recordPosition(old, old.chapters[2], 1, 10, 1000f)
+                // Make the newer target unambiguous even if both writes share a clock tick.
+                kotlinx.coroutines.delay(10)
+                library.recordPosition(target, target.chapters[0], 5, 10, 5000f)
+                library.changeSource(old, target, true)
+                assertTrue(library.isFavourite(old))
+                assertEquals(old.chapters[2].id, library.position(old)?.chapterId)
+                assertEquals(target.chapters[0].id, library.position(target)?.chapterId)
+                assertEquals(5000f, library.position(target)?.scroll)
+                assertEquals(ids.toSet(), library.favouriteCategories(target).toSet())
+                assertEquals(setOf(old.id, target.id), library.history().map { it.content.id }.toSet())
+            } finally { library.close() }
+        } finally { files.removeItemAtPath(directory, null) }
+    }
+
+    @Test
+    fun failedSourceChangesLeaveOriginalAndTargetRecordsUntouched() = runBlocking {
+        val directory = NSTemporaryDirectory() + NSUUID().UUIDString
+        val files = NSFileManager.defaultManager
+        check(files.createDirectoryAtPath(directory, true, null, null))
+        try {
+            val library = IosLibrary("$directory/library.db")
+            try {
+                val old = migrationWork(401, "OLD", listOf(1f))
+                val target = migrationWork(402, "NEW", listOf(1f))
+                library.setFavourite(old, true)
+                library.recordPosition(old, old.chapters[0], 1, 10, 1000f)
+                val collision = migrationWork(402, "OTHER", listOf(1f))
+                library.saveDetails(collision)
+                for (invalid in listOf(target, old, migrationWork(403, "NEW", emptyList()),
+                        migrationWork(404, "VIDEO", listOf(1f), "VIDEO"))) {
+                    assertFailsWith<IllegalArgumentException> { library.changeSource(old, invalid, false) }
+                }
+                assertEquals(listOf(old.id), library.favourites().map { it.content.id })
+                assertEquals(listOf(old.id), library.history().map { it.content.id })
+                assertEquals("OTHER", library.storedDetails(collision)?.sourceName)
+            } finally { library.close() }
+        } finally { files.removeItemAtPath(directory, null) }
+    }
+
     @Test
     fun categoriesSurviveReopeningAndBlankTitlesDoNotWrite() = runBlocking {
         val directory = NSTemporaryDirectory() + NSUUID().UUIDString

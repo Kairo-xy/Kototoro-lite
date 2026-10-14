@@ -38,7 +38,7 @@ final class SourceDetailsModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published var selectedLine: String?
     let runtime: IosSources
-    let content: IosSourceContent
+    @Published private(set) var content: IosSourceContent
     private var detailsRequest: UUID?
     /// The shown details came from the source in this screen, not from the cache or the saved record.
     private var fetched = false
@@ -77,11 +77,24 @@ final class SourceDetailsModel: ObservableObject {
     }
 
     func refresh() async {
+        let identity = ContentMarks.key(content)
         do {
             let result = try await runtime.refreshDetails(content: details ?? content)
+            guard identity == ContentMarks.key(content) else { return }
             apply(result); fetched = true; error = nil; challenge = nil
             DetailsCache.put(result)
-        } catch { if !Task.isCancelled { fail(error) } }
+        } catch { if !Task.isCancelled, identity == ContentMarks.key(content) { fail(error) } }
+    }
+
+    /// Invalidate the previous source's in-flight result before replacing the displayed work.
+    func changeContent(_ target: IosSourceContent) {
+        detailsRequest = nil
+        isLoading = false
+        content = target
+        apply(target)
+        fetched = true
+        error = nil; challenge = nil
+        DetailsCache.put(target)
     }
 
     /// Readable text, and whether the site asked for browser verification.
@@ -156,6 +169,7 @@ struct SourceDetailsView: View {
     @State private var recordError: String?
     @State private var resume: IosReadingPosition?
     @State private var editingCategories = false
+    @State private var changingSource = false
     @State private var savingFavourite = false
     @State private var chapterQuery = ""
     @AppStorage("details.newestFirst") private var newestFirst = false
@@ -220,7 +234,7 @@ struct SourceDetailsView: View {
             scrollOffset = offset
         }
         // Over the panorama the bar stays clear; the title appears once the header has scrolled away.
-        .navigationTitle(panorama && scrollOffset < 220 ? "" : model.content.title)
+        .navigationTitle(panorama && scrollOffset < 170 ? "" : model.content.title)
         .navigationBarTitleDisplayMode(.inline)
         .task {
             // Continuing from the library or history needs no fresh list: resume from the saved one at once.
@@ -242,11 +256,25 @@ struct SourceDetailsView: View {
             ToolbarItemGroup(placement: .topBarTrailing) {
                 if let url = URL(string: model.content.publicUrl), url.scheme?.hasPrefix("http") == true {
                     ShareLink(item: url) { Label("分享", systemImage: "square.and.arrow.up") }
-                    Menu("更多", systemImage: "ellipsis") {
-                        Button("在浏览器中打开", systemImage: "safari") { UIApplication.shared.open(url) }
-                        if isFavourite { Button("整理分类", systemImage: "folder") { editingCategories = true } }
-                    }
                 }
+                Menu("更多", systemImage: "ellipsis") {
+                    Button("换源", systemImage: "arrow.triangle.swap") { changingSource = true }
+                        .disabled(library.library == nil || (model.details == nil && model.isLoading))
+                        .accessibilityIdentifier("details.changeSource")
+                    if let url = URL(string: model.content.publicUrl), url.scheme?.hasPrefix("http") == true {
+                        Button("在浏览器中打开", systemImage: "safari") { UIApplication.shared.open(url) }
+                    }
+                    if isFavourite { Button("整理分类", systemImage: "folder") { editingCategories = true } }
+                }
+                .accessibilityIdentifier("details.more")
+            }
+        }
+        .sheet(isPresented: $changingSource) {
+            SourceChangeView(runtime: model.runtime, content: model.details ?? model.content) { target in
+                model.changeContent(target)
+                recordError = nil
+                changingSource = false
+                Task { await refreshRecords() }
             }
         }
         .sheet(isPresented: $editingCategories, onDismiss: { Task { await refreshRecords() } }) {
@@ -292,8 +320,6 @@ struct SourceDetailsView: View {
         let shown = model.details ?? model.content
         return Section {
             VStack(alignment: .leading, spacing: 16) {
-                // Leave the upper part of the panorama banner uncovered, as Android's header does.
-                if panorama && panoramaLayout == .top { Color.clear.frame(height: 48) }
                 HStack(alignment: .top, spacing: 16) {
                     CoverImage(runtime: model.runtime, content: shown)
                         .frame(width: 118, height: 177)

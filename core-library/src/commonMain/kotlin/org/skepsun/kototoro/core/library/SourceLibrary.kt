@@ -5,6 +5,8 @@ import androidx.room.deferredTransaction
 import androidx.room.useReaderConnection
 import androidx.room.useWriterConnection
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import org.skepsun.kototoro.bookmarks.data.BookmarkEntity
 import org.skepsun.kototoro.bookmarks.domain.novelBookmarkProgress
 import org.skepsun.kototoro.core.db.MangaDatabase
@@ -13,6 +15,12 @@ import org.skepsun.kototoro.core.source.*
 import org.skepsun.kototoro.favourites.data.FavouriteCategoryEntity
 import org.skepsun.kototoro.favourites.data.FavouriteEntity
 import org.skepsun.kototoro.history.data.HistoryEntity
+import org.skepsun.kototoro.migration.domain.MigrationChapter
+import org.skepsun.kototoro.migration.domain.MigrationContentInput
+import org.skepsun.kototoro.migration.domain.MigrationDataFlag
+import org.skepsun.kototoro.migration.domain.MigrationMode
+import org.skepsun.kototoro.migration.domain.MigrationPlanRules
+import org.skepsun.kototoro.migration.domain.MigrationSnapshot
 
 /** Platform DTO projection over the existing shared schema, with no parallel library or history database. */
 class SourceLibrary(
@@ -179,6 +187,71 @@ class SourceLibrary(
 
     suspend fun save(content: SourceContent) = database.useWriterConnection { connection ->
         connection.immediateTransaction { saveInTransaction(content) }
+    }
+
+    /** Android's migration plan, committed with target details in one transaction; files and bookmarks stay owned
+     * by the original work. The target's other categories and newer reading position are retained when merging. */
+    suspend fun migrate(old: SourceContent, target: SourceContent, keepOriginal: Boolean) {
+        require(old.id != target.id && old.source.name != target.source.name) { "请选择其他来源的作品" }
+        require(old.source.contentType.removePrefix("HENTAI_") == target.source.contentType.removePrefix("HENTAI_")) {
+            "只能换到同类型作品"
+        }
+        val targetChapters = target.chapters
+        require(!targetChapters.isNullOrEmpty() && targetChapters.all { it.source.name == target.source.name }) {
+            "目标作品没有可用章节"
+        }
+        database.useWriterConnection { connection ->
+            connection.immediateTransaction {
+                currentCoroutineContext().ensureActive()
+                val storedOld = find(old.id)
+                storedOld?.let { requireSameIdentity(requireNotNull(database.getMangaDao().find(old.id)).manga, old) }
+                val original = storedOld?.takeIf { !it.chapters.isNullOrEmpty() } ?: old
+                val dao = database.getMigrationDao()
+                val favourites = database.getFavouritesDao()
+                val history = database.getHistoryDao()
+                val prefs = database.getPreferencesDao()
+                val links = database.getTrackingSiteDao()
+                val tracks = database.getTracksDao()
+                val snapshot = MigrationSnapshot(favourites.findActiveByMangaId(old.id), history.find(old.id),
+                    prefs.find(old.id), links.findLinksByManga(old.id), tracks.find(old.id),
+                    dao.findNotes(old.id), dao.findSessions(old.id), dao.findJumpPoints(old.id))
+                val previousTargetHistory = history.find(target.id)
+                val plan = MigrationPlanRules.plan(original.migrationInput(snapshot.history?.chapterId),
+                    target.migrationInput(null), snapshot,
+                    if (keepOriginal) MigrationMode.COPY else MigrationMode.REPLACE,
+                    MigrationDataFlag.ALL, kotlin.time.Clock.System.now().toEpochMilliseconds())
+                saveInTransaction(target)
+                if (plan.deleteOldFavourites) favourites.delete(old.id)
+                for (entry in plan.favouritesToUpsert) {
+                    // Existing target memberships keep their own pin and sorting preference.
+                    if (favourites.find(target.id, entry.categoryId)?.deletedAt != 0L) favourites.upsert(entry)
+                }
+                if (plan.deleteOldHistory) history.delete(old.id)
+                plan.historyToUpsert?.let {
+                    if (previousTargetHistory == null || previousTargetHistory.updatedAt < it.updatedAt) history.upsert(it)
+                }
+                plan.prefsToUpsert?.let { if (prefs.find(target.id) == null) prefs.upsert(it) }
+                plan.trackingLinksToDelete.forEach { links.deleteLink(it.service, it.remoteId, it.mangaId) }
+                plan.trackingLinksToUpsert.forEach { links.upsertLink(it) }
+                if (plan.deleteOldTrack) tracks.delete(old.id)
+                plan.trackToUpsert?.let { tracks.upsert(it) }
+                if (plan.notesToUpdate.isNotEmpty()) dao.updateNotes(plan.notesToUpdate)
+                if (plan.notesToInsert.isNotEmpty()) dao.insertNotes(plan.notesToInsert)
+                if (plan.moveStats) dao.moveStats(old.id, target.id)
+                if (plan.sessionsToUpdate.isNotEmpty()) dao.updateSessions(plan.sessionsToUpdate)
+                if (plan.jumpPointsToUpdate.isNotEmpty()) dao.updateJumpPoints(plan.jumpPointsToUpdate)
+                currentCoroutineContext().ensureActive()
+            }
+        }
+    }
+
+    private fun SourceContent.migrationInput(historyChapterId: Long?): MigrationContentInput {
+        val chapters = chapters.orEmpty()
+        val current = chapters.firstOrNull { it.id == historyChapterId }
+        val branch = if (current != null) current.branch else chapters.groupBy { it.branch }.maxByOrNull { it.value.size }?.key
+        return MigrationContentInput(id, source.name, chapters.map {
+            MigrationChapter(it.id, it.volume, it.number, it.branch, it.uploadDate)
+        }, branch)
     }
 
     /** The stored suggestions, most relevant first. */

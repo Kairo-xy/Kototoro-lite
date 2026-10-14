@@ -243,6 +243,11 @@ class IosLibrary {
     @Throws(Exception::class)
     suspend fun saveDetails(content: IosSourceContent) = records.save(content.value)
 
+    /** Moves Android-compatible library records after Swift has fetched and confirmed the target's details. */
+    @Throws(Exception::class)
+    suspend fun changeSource(content: IosSourceContent, target: IosSourceContent, keepOriginal: Boolean) =
+        records.migrate(content.value, target.value, keepOriginal)
+
     /**
      * Details saved when this work was last opened (every details screen saves them), with their chapters; null when
      * none were saved or they belong to another source. Lets a long list show before the source answers again.
