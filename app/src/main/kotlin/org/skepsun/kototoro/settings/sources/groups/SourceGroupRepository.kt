@@ -103,7 +103,7 @@ class SourceGroupRepository @Inject constructor(
 					// JSON sources live in their own table; their lock is keyed by the entity id.
 					SourceGroupSourceState(
 						source = it.id,
-						enabled = it.isEnabled,
+						enabled = it.enabled,
 						pinned = it.isPinned,
 						sortKey = 0,
 						locked = contentSources.lockState(it.id),
