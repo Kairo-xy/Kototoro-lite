@@ -646,7 +646,7 @@ extern "C" int ktr_native_install(JNIEnv *env) {
     jclass type = env->FindClass("org/skepsun/kototoro/ios/shims/IosNative");
     // The independent fixture profile does not use Android shims.
     if (type == nullptr) { env->ExceptionClear(); return 0; }
-    JNINativeMethod methods[] = {
+    JNINativeMethod base_methods[] = {
         {const_cast<char *>("decodeImage"), const_cast<char *>("([BZI)[I"), reinterpret_cast<void *>(decodeImage)},
         {const_cast<char *>("encodeImage"), const_cast<char *>("([IIILjava/lang/String;I)[B"), reinterpret_cast<void *>(encodeImage)},
         {const_cast<char *>("measureText"), const_cast<char *>("(Ljava/lang/String;Ljava/lang/String;IF)[F"), reinterpret_cast<void *>(measureText)},
@@ -658,6 +658,14 @@ extern "C" int ktr_native_install(JNIEnv *env) {
         {const_cast<char *>("createJavaScript"), const_cast<char *>("(Ljava/lang/Object;)J"), reinterpret_cast<void *>(createJavaScript)},
         {const_cast<char *>("evaluateJavaScript"), const_cast<char *>("(JLjava/lang/String;Ljava/lang/String;)Ljava/lang/String;"), reinterpret_cast<void *>(evaluateJavaScript)},
         {const_cast<char *>("closeJavaScript"), const_cast<char *>("(J)V"), reinterpret_cast<void *>(closeJavaScript)},
+    };
+    int result = env->RegisterNatives(type, base_methods, sizeof(base_methods) / sizeof(base_methods[0]));
+    if (result != 0) {
+        env->DeleteLocalRef(type);
+        return result;
+    }
+    // Optional: network transport and CommonCrypto digest; older shim jars without them continue on JDK.
+    JNINativeMethod extended_methods[] = {
         {const_cast<char *>("netAvailable"), const_cast<char *>("()Z"), reinterpret_cast<void *>(netAvailable)},
         {const_cast<char *>("netStart"), const_cast<char *>("(Ljava/lang/String;Ljava/lang/String;[Ljava/lang/String;[BI)J"), reinterpret_cast<void *>(netStart)},
         {const_cast<char *>("netHead"), const_cast<char *>("(JI)[Ljava/lang/String;"), reinterpret_cast<void *>(netHead)},
@@ -670,9 +678,11 @@ extern "C" int ktr_native_install(JNIEnv *env) {
         {const_cast<char *>("digestCopy"), const_cast<char *>("(J)J"), reinterpret_cast<void *>(digestCopy)},
         {const_cast<char *>("digestFree"), const_cast<char *>("(J)V"), reinterpret_cast<void *>(digestFree)},
     };
-    int result = env->RegisterNatives(type, methods, sizeof(methods) / sizeof(methods[0]));
+    if (env->RegisterNatives(type, extended_methods, sizeof(extended_methods) / sizeof(extended_methods[0])) != 0 ||
+        env->ExceptionCheck()) {
+        env->ExceptionClear();
+    }
     env->DeleteLocalRef(type);
-    if (result != 0) return result;
     // Native digests take precedence for every MessageDigest user (image store, artifact checks, extensions).
     // Optional: an older shim jar without the provider keeps the JDK's digests.
     jclass provider = env->FindClass("org/skepsun/kototoro/ios/shims/IosDigestProvider");

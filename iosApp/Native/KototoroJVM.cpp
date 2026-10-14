@@ -130,6 +130,10 @@ int ktr_vm_start(const char *java_home, const char *classpath,
     }
     if (vm != nullptr) {
         if (vm_home == java_home && vm_classpath == classpath && vm_options == extra) return 0;
+        if (vm_attempted && vm_home.empty()) {
+            report(error, "JVM initialization previously failed; restart the process before retrying");
+            return -1;
+        }
         report(error, "The process already owns a JVM with a different configuration");
         return -1;
     }
