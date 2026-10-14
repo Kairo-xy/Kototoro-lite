@@ -26,34 +26,60 @@ class SettingsSyncStore @Inject constructor(
 	)
 	private val meta = context.getSharedPreferences("sync_settings_meta", Context.MODE_PRIVATE)
 
+	/**
+	 * Snapshot of the local settings with per-key modification times.
+	 *
+	 * First-sync policy: on the very first run every existing key is recorded with `at = 0`
+	 * (initial/default state), so any remote entry wins over it. After that, a key that was never seen
+	 * before is a new user change and gets `at = now`. Keys that disappeared from the preferences
+	 * (reset to default) are emitted as tombstones so that a reset converges instead of being undone.
+	 */
 	fun buildLocal(now: Long): Map<String, Map<String, SettingEntry>> {
 		val metaUpdates = HashMap<String, String>()
+		val initialized = meta.getString(META_INITIALIZED, null) == "true"
+		val metaAll = meta.all
 		val result = LinkedHashMap<String, Map<String, SettingEntry>>()
 		for ((store, prefs) in stores) {
 			val entries = LinkedHashMap<String, SettingEntry>()
-			for ((key, value) in prefs.all) {
+			val current = prefs.all
+			for ((key, value) in current) {
 				if (!SettingsSyncMerger.isSyncableKey(key)) continue
 				val encoded = encode(value) ?: continue
 				val metaKey = "$store/$key"
 				val hash = hashOf(encoded)
-				val stored = meta.getString(metaKey, null)
+				val stored = metaAll[metaKey] as? String
 				val storedHash = stored?.substringBefore('|')?.toIntOrNull()
 				val storedAt = stored?.substringAfter('|', "")?.toLongOrNull()
 				val at = when {
 					stored == null -> {
-						metaUpdates[metaKey] = "$hash|0"
-						0L
+						val initial = if (initialized) now else 0L
+						metaUpdates[metaKey] = "$hash|$initial"
+						initial
 					}
 					storedHash == hash && storedAt != null -> storedAt
 					else -> {
+						// Changed locally, or re-created after a deletion.
 						metaUpdates[metaKey] = "$hash|$now"
 						now
 					}
 				}
 				entries[key] = SettingEntry(t = encoded.first, v = encoded.second, at = at)
 			}
+			val prefix = "$store/"
+			for ((metaKey, stored) in metaAll) {
+				if (!metaKey.startsWith(prefix) || stored !is String) continue
+				val key = metaKey.removePrefix(prefix)
+				if (key in current || !SettingsSyncMerger.isSyncableKey(key)) continue
+				val deletedAt = if (stored.startsWith(DELETED_PREFIX)) {
+					stored.removePrefix(DELETED_PREFIX).toLongOrNull() ?: now
+				} else {
+					now.also { metaUpdates[metaKey] = "$DELETED_PREFIX$now" }
+				}
+				entries[key] = SettingEntry.deleted(deletedAt)
+			}
 			result[store] = entries
 		}
+		if (!initialized) metaUpdates[META_INITIALIZED] = "true"
 		saveMeta(metaUpdates)
 		return result
 	}
@@ -65,16 +91,23 @@ class SettingsSyncStore @Inject constructor(
 			val prefs = stores[store] ?: continue
 			val localValues = prefs.all
 			val writes = LinkedHashMap<String, Any>()
+			val removals = ArrayList<String>()
 			for ((key, entry) in entries) {
 				if (!SettingsSyncMerger.isSyncableKey(key)) continue
+				if (entry.isDeleted) {
+					if (localValues.containsKey(key)) removals += key
+					metaUpdates["$store/$key"] = "$DELETED_PREFIX${entry.at}"
+					continue
+				}
 				if (encode(localValues[key]) == (entry.t to entry.v)) continue
 				val value = decode(entry) ?: continue
 				val encoded = encode(value) ?: continue
 				writes[key] = value
 				metaUpdates["$store/$key"] = "${hashOf(encoded)}|${entry.at}"
 			}
-			if (writes.isEmpty()) continue
+			if (writes.isEmpty() && removals.isEmpty()) continue
 			prefs.edit {
+				removals.forEach { remove(it) }
 				for ((key, value) in writes) {
 					when (value) {
 						is Boolean -> putBoolean(key, value)
@@ -86,7 +119,7 @@ class SettingsSyncStore @Inject constructor(
 					}
 				}
 			}
-			applied += writes.size
+			applied += writes.size + removals.size
 		}
 		saveMeta(metaUpdates)
 		return applied
@@ -135,6 +168,8 @@ class SettingsSyncStore @Inject constructor(
 	}
 
 	private companion object {
+		const val META_INITIALIZED = "__initialized__"
+		const val DELETED_PREFIX = "d|"
 		const val STORE_APP = "app"
 		const val STORE_TAP_GRID = "tap_grid"
 		const val STORE_NOVEL_READER = "novel_reader"

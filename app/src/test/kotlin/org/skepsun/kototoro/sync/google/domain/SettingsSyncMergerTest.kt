@@ -47,4 +47,34 @@ class SettingsSyncMergerTest : StringSpec({
 		SettingsSyncMerger.isSyncableKey("reader_mode") shouldBe true
 		SettingsSyncMerger.isSyncableKey("theme") shouldBe true
 	}
+
+	"credentials in custom headers and device-local storage paths are not syncable" {
+		listOf(
+			"reader_translation_api_custom_headers",
+			"reader_e2e_api_custom_headers",
+			"local_storage",
+			"local_novel_storage",
+			"local_video_storage",
+		).forEach { key ->
+			SettingsSyncMerger.isSyncableKey(key) shouldBe false
+		}
+		SettingsSyncMerger.isSyncableKey("feed_header") shouldBe true
+	}
+
+	"newer tombstone beats an older value and an older tombstone loses" {
+		val local = mapOf("glass_tuning" to SettingEntry("s", "x", 100L))
+		val remoteDeleted = mapOf("glass_tuning" to SettingEntry.deleted(200L))
+		SettingsSyncMerger.merge(local, remoteDeleted)["glass_tuning"]?.isDeleted shouldBe true
+
+		val localNewer = mapOf("glass_tuning" to SettingEntry("s", "y", 300L))
+		val merged = SettingsSyncMerger.merge(localNewer, remoteDeleted)["glass_tuning"]
+		merged?.isDeleted shouldBe false
+		merged?.v shouldBe "y"
+	}
+
+	"initial local entry with at zero loses to any remote entry" {
+		val local = mapOf("theme" to SettingEntry("s", "default", 0L))
+		val remote = mapOf("theme" to SettingEntry("s", "dark", 50L))
+		SettingsSyncMerger.merge(local, remote)["theme"]?.v shouldBe "dark"
+	}
 })

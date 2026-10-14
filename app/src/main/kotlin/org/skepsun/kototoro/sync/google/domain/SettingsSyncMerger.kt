@@ -7,7 +7,16 @@ data class SettingEntry(
 	val t: String,
 	val v: String,
 	val at: Long,
-)
+) {
+	val isDeleted: Boolean get() = t == TYPE_DELETED
+
+	companion object {
+		/** Type tag of a tombstone: the key was removed (reset to default) at [at]. */
+		const val TYPE_DELETED = "d"
+
+		fun deleted(at: Long) = SettingEntry(t = TYPE_DELETED, v = "", at = at)
+	}
+}
 
 @Serializable
 data class SettingsSnapshot(
@@ -32,8 +41,13 @@ object SettingsSyncMerger {
 		"device_id",
 		"clear",
 		"incognito",
+		// Custom HTTP headers may carry Authorization / Bearer credentials.
+		"custom_headers",
+		"authorization",
+		"bearer",
 	)
-	private val excludedSuffixes = listOf("_dir", "_dirs", "_dir_uris", "_dir_uri", "_uri", "_uris", "_path")
+	// "_storage" keys (local_storage, local_novel_storage, local_video_storage) hold device-local File.path values.
+	private val excludedSuffixes = listOf("_dir", "_dirs", "_dir_uris", "_dir_uri", "_uri", "_uris", "_path", "_storage")
 	private val excludedPrefixes = listOf("sync_", "google_drive", "backup_periodic")
 	private val excludedKeys = setOf("init", "app_version")
 
