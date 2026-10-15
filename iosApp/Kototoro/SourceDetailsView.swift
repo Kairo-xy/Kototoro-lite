@@ -139,7 +139,7 @@ final class SourceDetailsModel: ObservableObject {
     var isVideo: Bool { content.mediaKind == "VIDEO" }
     var isNovel: Bool { content.mediaKind == "NOVEL" }
 
-    /// Playback lines in source order; a single unnamed line is represented by one nil entry.
+    /// Episode groups in source order, from parser/Aniyomi branches or CMS lines.
     var lines: [String?] {
         var seen = Set<String?>()
         return chapters.map(\.line).filter { seen.insert($0).inserted }
@@ -147,7 +147,7 @@ final class SourceDetailsModel: ObservableObject {
 
     var visibleChapters: [IosSourceChapter] {
         guard isVideo, lines.count > 1 else { return ordered(chapters) }
-        let line = selectedLine ?? lines.first ?? nil
+        let line = lines.contains(selectedLine) ? selectedLine : lines.first ?? nil
         return ordered(chapters.filter { $0.line == line })
     }
 
@@ -952,7 +952,8 @@ struct SourceDetailsView: View {
 
     @ViewBuilder
     private var dockPrimaryActionCapsule: some View {
-        if let details = model.details, let target = resumeChapter() ?? model.chapters.first {
+        if let details = model.details,
+           let target = resumeChapter() ?? (model.isVideo ? model.visibleChapters.first : model.chapters.first) {
             let resuming = resumeChapter() != nil
             let title = resuming ? (model.isVideo ? "继续播放" : "继续") : (model.isVideo ? "开始播放" : "开始阅读")
 
@@ -990,7 +991,13 @@ struct SourceDetailsView: View {
                     }
                     .disabled(library.library == nil || (model.details == nil && model.isLoading))
 
-                    if model.branches.count > 1 {
+                    if model.isVideo && model.lines.count > 1 {
+                        Section("切换线路") {
+                            ForEach(model.lines, id: \.self) { line in
+                                Button(line ?? "默认") { model.selectedLine = line }
+                            }
+                        }
+                    } else if !model.isVideo && model.branches.count > 1 {
                         Section("切换线路/分支") {
                             ForEach(model.branches, id: \.self) { branch in
                                 Button(branch ?? "默认") {
@@ -999,7 +1006,7 @@ struct SourceDetailsView: View {
                             }
                         }
                     }
-                    if let first = model.chapters.first {
+                    if let first = model.isVideo ? model.visibleChapters.first : model.chapters.first {
                         Button(model.isVideo ? "从第一集开始播放" : "从第一话开始阅读") {
                             if model.isVideo {
                                 playing = PlaybackRequest(content: details, chapter: first)

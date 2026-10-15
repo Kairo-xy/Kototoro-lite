@@ -10,7 +10,12 @@ import okhttp3.Response
 import org.skepsun.kototoro.core.source.SourceInvalidArgumentException
 import org.skepsun.kototoro.parsers.ContentParser
 import java.io.IOException
+import java.io.InputStream
 import java.net.IDN
+import java.net.URI
+import java.nio.file.Files
+import java.nio.file.Path
+import java.util.Base64
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
@@ -20,6 +25,38 @@ import kotlin.coroutines.resumeWithException
  * ecosystems.
  */
 internal class ParserImageRequests(private val platform: ParserPlatform) {
+
+    /** Some parsers decrypt images themselves and return a temporary file or an inline image. */
+    suspend fun <T> readImage(
+        parser: ContentParser, url: String, headers: Map<String, String>?, read: (InputStream, Long) -> T,
+    ): T = when {
+        url.startsWith("file:") -> {
+            val file = try {
+                val uri = URI(url)
+                if (!uri.rawAuthority.isNullOrEmpty() || uri.query != null || uri.fragment != null) {
+                    throw SourceInvalidArgumentException()
+                }
+                Path.of(uri)
+            } catch (_: IllegalArgumentException) {
+                throw SourceInvalidArgumentException()
+            } catch (_: java.net.URISyntaxException) {
+                throw SourceInvalidArgumentException()
+            }
+            if (!Files.isRegularFile(file)) throw SourceInvalidArgumentException()
+            Files.newInputStream(file).use { read(it, Files.size(file)) }
+        }
+        url.startsWith("data:") -> {
+            val comma = url.indexOf(',')
+            if (comma < 5) throw SourceInvalidArgumentException()
+            val type = url.substring(5, comma)
+            if (!type.startsWith("image/") || !type.endsWith(";base64")) throw SourceInvalidArgumentException()
+            Base64.getDecoder().wrap(url.substring(comma + 1).byteInputStream(Charsets.US_ASCII)).use { read(it, -1) }
+        }
+        else -> execute(parser, request(parser, url, headers)).use { response ->
+            if (response.code !in 200..299) throw IOException("Image response failed")
+            read(response.body.byteStream(), response.body.contentLength())
+        }
+    }
 
     fun request(parser: ContentParser, url: String, pageHeaders: Map<String, String>?): Request {
         val target = url.toHttpUrlOrNull()?.takeIf { it.scheme == "http" || it.scheme == "https" }

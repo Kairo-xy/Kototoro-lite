@@ -35,7 +35,6 @@ import org.skepsun.kototoro.parsers.model.ContentListFilter
 import org.skepsun.kototoro.parsers.model.ContentSource
 import org.skepsun.kototoro.parsers.model.SortOrder
 import org.skepsun.kototoro.source.host.SourceImageStore
-import java.io.IOException
 import java.nio.file.Path
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
@@ -131,12 +130,9 @@ class ParserSourceRuntime(
         val store = images ?: throw SourceOperationUnsupportedException()
         val url = if (isDirect(page.url)) page.url else
             handle.parser.getPageUrl(page.toParser(resolver(handle))).also { check(it.isNotEmpty()) { "Page url is empty" } }
-        val request = requests.request(handle.parser, url, page.headers)
         val context = currentCoroutineContext()
-        requests.execute(handle.parser, request).use { response ->
-            if (response.code !in 200..299) throw IOException("Image response failed")
-            val body = response.body
-            store.materialize(handle.info.source, page.id, body.byteStream(), body.contentLength()) { context.ensureActive() }
+        requests.readImage(handle.parser, url, page.headers) { input, length ->
+            store.materialize(handle.info.source, page.id, input, length) { context.ensureActive() }
         }
     }
 
@@ -145,12 +141,9 @@ class ParserSourceRuntime(
             val store = images ?: throw SourceOperationUnsupportedException()
             val url = (if (large) content.largeCoverUrl ?: content.coverUrl else content.coverUrl)
                 ?.takeIf(String::isNotBlank) ?: throw SourceInvalidArgumentException()
-            val request = requests.request(handle.parser, url, null)
             val context = currentCoroutineContext()
-            requests.execute(handle.parser, request).use { response ->
-                if (response.code !in 200..299) throw IOException("Image response failed")
-                val body = response.body
-                store.materializeCover(handle.info.source, content.id, body.byteStream(), body.contentLength()) {
+            requests.readImage(handle.parser, url, null) { input, length ->
+                store.materializeCover(handle.info.source, content.id, input, length) {
                     context.ensureActive()
                 }
             }

@@ -86,6 +86,7 @@ class AniyomiSourceRuntimeTest {
         assertEquals(listOf("Failing", "First", "Hosters"), episodes.map { it.title })
         assertEquals(listOf(1f, 2f, 1.5f), episodes.map { it.number })
         assertEquals("Fansub", episodes.first().scanlator)
+        assertEquals("Fansub", episodes.first().playbackLine)
         assertEquals(1720000000000L, episodes.first().uploadDate)
     }
 

@@ -6,8 +6,6 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonObject
-import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -26,6 +24,7 @@ import org.skepsun.kototoro.core.source.SourcePreferenceValue
 import org.skepsun.kototoro.core.source.SourceProtocolClient
 import org.skepsun.kototoro.core.source.SourceTag
 import org.skepsun.kototoro.core.source.SourceTransport
+import org.skepsun.kototoro.core.source.playbackLine
 import org.skepsun.kototoro.tvbox.MacCmsSourceRuntime
 import org.skepsun.kototoro.bookmarks.domain.novelBookmarkChapterProgress
 import org.skepsun.kototoro.bookmarks.domain.resolveNovelBookmarkPosition
@@ -367,11 +366,8 @@ class IosSourceChapter internal constructor(internal val value: SourceChapter) {
     val scanlator: String? get() = value.scanlator?.takeIf(String::isNotBlank)
     /** Epoch milliseconds; 0 when unknown. */
     val uploadDate: Long get() = value.uploadDate
-    /** The playback line (Apple CMS `vod_play_from`) this episode belongs to, when the source names it. */
-    val line: String? get() = value.sourceData?.let { data ->
-        runCatching { (Json.parseToJsonElement(data) as? JsonObject)?.get("line") as? JsonPrimitive }
-            .getOrNull()?.takeIf { it.isString }?.content
-    }
+    /** The named episode group supplied by the source. */
+    val line: String? get() = value.playbackLine
 }
 
 class IosSourcePage internal constructor(internal val value: SourcePage) {

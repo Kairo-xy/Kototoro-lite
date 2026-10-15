@@ -219,6 +219,51 @@ class ParserSourceRuntimeTest {
     }
 
     @Test
+    fun `decrypted temporary file covers and pages are materialized without HTTP`() = runBlocking {
+        val item = runtime.getList("FIXTURE_KOTOTORO_ONLY", 0, null, null).first()
+        val file = Files.write(root.resolve("cg51_封面 image.png"), Fixtures.png)
+        val local = item.copy(coverUrl = file.toUri().toString(), largeCoverUrl = file.toUri().toString())
+        val cover = runtime.fetchCover(local, large = false)
+        assertEquals(item.id, cover.contentId)
+        assertTrue(Files.readAllBytes(root.resolve("images").resolve(cover.relativePath)).contentEquals(Fixtures.png))
+        assertEquals(cover.sha256, runtime.fetchCover(local, large = true).sha256)
+        val chapter = runtime.getDetails(item, SourceDetailsFetchMode.ALLOW_CACHE).chapters!!.first()
+        val page = runtime.getPages(chapter, null).first().copy(url = file.toUri().toString())
+        assertEquals(cover.sha256, runtime.fetchImage(page).sha256)
+        assertTrue(requests.isEmpty())
+    }
+
+    @Test
+    fun `inline image covers and pages use the same validated image store`() = runBlocking {
+        val item = runtime.getList("FIXTURE_KOTOTORO_ONLY", 0, null, null).first()
+        val url = "data:image/png;base64," + java.util.Base64.getEncoder().encodeToString(Fixtures.png)
+        val cover = runtime.fetchCover(item.copy(coverUrl = url), large = false)
+        assertEquals(Fixtures.png.size.toLong(), cover.byteSize)
+        assertTrue(Files.readAllBytes(root.resolve("images").resolve(cover.relativePath)).contentEquals(Fixtures.png))
+        val chapter = runtime.getDetails(item, SourceDetailsFetchMode.ALLOW_CACHE).chapters!!.first()
+        val page = runtime.getPages(chapter, null).first().copy(url = url)
+        assertEquals(cover.sha256, runtime.fetchImage(page).sha256)
+        assertTrue(requests.isEmpty())
+    }
+
+    @Test
+    fun `local images reject missing files invalid bytes and remote file authorities`() = runBlocking {
+        val item = runtime.getList("FIXTURE_KOTOTORO_ONLY", 0, null, null).first()
+        val invalid = Files.writeString(root.resolve("not-image"), "not an image").toUri().toString()
+        for (url in listOf(root.resolve("missing.png").toUri().toString(), "file://remote/cover.png",
+            "data:text/plain;base64,aGVsbG8=", "data:image/png;base64")) {
+            assertThrows<SourceInvalidArgumentException> {
+                runBlocking { runtime.fetchCover(item.copy(coverUrl = url), false) }
+            }
+        }
+        assertThrows<java.io.IOException> { runBlocking { runtime.fetchCover(item.copy(coverUrl = invalid), false) } }
+        assertThrows<java.io.IOException> {
+            runBlocking { runtime.fetchCover(item.copy(coverUrl = "data:image/png;base64,"), false) }
+        }
+        assertTrue(requests.isEmpty())
+    }
+
+    @Test
     fun `an http failure is reported and nothing is stored`() = runBlocking {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest) = MockResponse().setResponseCode(403)

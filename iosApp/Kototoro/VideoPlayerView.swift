@@ -41,6 +41,9 @@ final class VideoPlayerModel: ObservableObject {
     private var preferredSubtitle: String?
     let runtime: IosSources
     let content: IosSourceContent
+    /// Bridge the full episode list once; opening the picker must not repeatedly map Kotlin objects.
+    let chapters: [IosSourceChapter]
+    let lines: [String?]
     private var request: UUID?
     private var timeObserver: Any?
     private var observers: [AnyCancellable] = []
@@ -51,7 +54,13 @@ final class VideoPlayerModel: ObservableObject {
         self.runtime = runtime
         self.content = content
         self.chapter = chapter
+        let episodes = content.chapters
+        chapters = episodes
+        var seen = Set<String?>()
+        lines = episodes.map(\.line).filter { seen.insert($0).inserted }
     }
+
+    func episodes(on line: String?) -> [IosSourceChapter] { chapters.filter { $0.line == line } }
 
     var previous: IosSourceChapter? { adjacent(forward: false) }
     var next: IosSourceChapter? { adjacent(forward: true) }
@@ -315,6 +324,7 @@ struct VideoPlayerView: View {
     @State private var scrubbing: Double?
     @State private var fill = false
     @State private var pip = PictureInPicture()
+    @State private var showingEpisodes = false
 
     init(runtime: IosSources, content: IosSourceContent, chapter: IosSourceChapter) {
         _model = StateObject(wrappedValue: VideoPlayerModel(runtime: runtime, content: content, chapter: chapter))
@@ -362,6 +372,11 @@ struct VideoPlayerView: View {
         .persistentSystemOverlays(controlsVisible ? .automatic : .hidden)
         .task { model.library = library.library; await model.load() }
         .onChange(of: model.isPlaying) { _, playing in if playing { scheduleHide() } else { setControls(true) } }
+        .sheet(isPresented: $showingEpisodes, onDismiss: { setControls(true) }) {
+            VideoEpisodesView(model: model)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
         .onDisappear { Task { await model.persist(); model.stop(); await library.refresh() } }
     }
 
@@ -401,6 +416,14 @@ struct VideoPlayerView: View {
                     .accessibilityIdentifier("player.title")
             }
             Spacer(minLength: 0)
+            if model.chapters.count > 1 {
+                Button("选集", systemImage: "list.bullet") {
+                    hideTask?.cancel()
+                    showingEpisodes = true
+                }
+                .labelStyle(.iconOnly).font(.title3).frame(width: 40, height: 40)
+                .accessibilityIdentifier("player.episodes")
+            }
             AirPlayButton().frame(width: 36, height: 36)
             if pip.isPossible {
                 Button("画中画", systemImage: "pip.enter") { pip.start() }
@@ -539,7 +562,7 @@ struct VideoPlayerView: View {
         hideTask?.cancel()
         hideTask = Task { @MainActor in
             try? await Task.sleep(for: .seconds(3.5))
-            guard !Task.isCancelled, model.isPlaying, scrubbing == nil else { return }
+            guard !Task.isCancelled, model.isPlaying, scrubbing == nil, !showingEpisodes else { return }
             withAnimation(.easeInOut(duration: 0.3)) { controlsVisible = false }
         }
     }
@@ -553,6 +576,56 @@ struct VideoPlayerView: View {
 
     static func rateTitle(_ rate: Float) -> String {
         rate == 1 ? "1×" : String(format: "%g×", rate)
+    }
+}
+
+/// Episode groups use chapter metadata; the player's stream menu handles the selected episode's hosters/qualities.
+private struct VideoEpisodesView: View {
+    @ObservedObject var model: VideoPlayerModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedLine: String?
+
+    init(model: VideoPlayerModel) {
+        self.model = model
+        _selectedLine = State(initialValue: model.chapter.line)
+    }
+
+    var body: some View {
+        NavigationStack {
+            List {
+                if model.lines.count > 1 {
+                    Section {
+                        Picker("线路", selection: $selectedLine) {
+                            ForEach(model.lines, id: \.self) { line in
+                                Text(line ?? "默认").tag(line)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                        .accessibilityIdentifier("player.episodeLine")
+                    }
+                }
+                Section("剧集") {
+                    ForEach(model.episodes(on: selectedLine), id: \.id) { chapter in
+                        Button {
+                            dismiss()
+                            if chapter.id != model.chapter.id { Task { await model.move(to: chapter) } }
+                        } label: {
+                            HStack {
+                                Text(SourceDetailsView.episodeTitle(chapter))
+                                Spacer()
+                                if chapter.id == model.chapter.id { Image(systemName: "checkmark") }
+                            }
+                        }
+                        .disabled(model.isLoading)
+                        .accessibilityIdentifier("player.episode.\(chapter.id)")
+                        .accessibilityValue(chapter.id == model.chapter.id ? "正在播放" : "")
+                    }
+                }
+            }
+            .navigationTitle("选集")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+        }
     }
 }
 

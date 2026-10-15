@@ -80,6 +80,20 @@ final class VideoSourceTests: XCTestCase {
         XCTAssertEqual(app.staticTexts["player.title"].label, "第1集")
         attach(app, "Native HLS playback")
 
+        playerControl(app, "player.episodes").tap()
+        let choices = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "player.episode."))
+        XCTAssertTrue(choices.firstMatch.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertEqual(choices.count, 2, "Only episodes of the chosen line belong in the picker")
+        element(app, "player.episodeLine").tap()
+        tapMenuItem(app, "备用")
+        XCTAssertEqual(choices.count, 1, "The backup line has one episode, not a flattened list")
+        element(app, "player.episodeLine").tap()
+        tapMenuItem(app, "高清")
+        XCTAssertEqual(choices.count, 2)
+        attach(app, "Player episode and line picker")
+        choices.matching(NSPredicate(format: "label BEGINSWITH %@", "第1集")).firstMatch.tap()
+        XCTAssertTrue(app.navigationBars["选集"].waitForNonExistence(timeout: 5))
+
         playerControl(app, "player.next").tap()
         // The controls may fade while the next episode starts; reveal them to read its title.
         var title = ""
@@ -92,6 +106,14 @@ final class VideoSourceTests: XCTestCase {
         // The second episode is the last on its line: no cross-line "next".
         XCTAssertTrue(playerControl(app, "player.close").exists)
         XCTAssertFalse(app.buttons["player.next"].exists)
+        playerControl(app, "player.episodes").tap()
+        let firstEpisode = choices.matching(NSPredicate(format: "label BEGINSWITH %@", "第1集")).firstMatch
+        XCTAssertTrue(firstEpisode.waitForExistence(timeout: 5))
+        firstEpisode.tap()
+        _ = playerControl(app, "player.close")
+        let firstTitle = XCTNSPredicateExpectation(predicate: NSPredicate(format: "label == %@", "第1集"),
+                                                   object: app.staticTexts["player.title"])
+        XCTAssertEqual(XCTWaiter.wait(for: [firstTitle], timeout: 10), .completed)
         playerControl(app, "player.close").tap()
         XCTAssertTrue(app.staticTexts["details.title"].waitForExistence(timeout: 10))
 

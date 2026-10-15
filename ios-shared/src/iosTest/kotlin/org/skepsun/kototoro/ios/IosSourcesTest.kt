@@ -40,6 +40,13 @@ class IosSourcesTest {
     private val hash = "a".repeat(64)
 
     @Test
+    fun episodeLinesPreserveParserAndAniyomiBranches() {
+        assertEquals("线路一", IosSourceChapter(chapter.copy(branch = "线路一")).line)
+        assertEquals("备用", IosSourceChapter(chapter.copy(branch = "备用", scanlator = "备用")).line)
+        assertEquals("高清", IosSourceChapter(chapter.copy(branch = "线路一", sourceData = """{"line":"高清"}""")).line)
+    }
+
+    @Test
     fun fullModelsSurviveSwiftProjectionAndImageIdentityIsChecked() = runBlocking {
         var closed = false
         val runtime = IosSources(object : IosSourceTransport {
