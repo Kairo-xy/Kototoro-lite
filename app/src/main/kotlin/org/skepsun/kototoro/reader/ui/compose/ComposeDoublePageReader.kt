@@ -31,10 +31,12 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
@@ -61,6 +63,16 @@ import org.skepsun.kototoro.core.prefs.ReaderBackground
 import org.skepsun.kototoro.core.prefs.ReaderAnimation
 import org.skepsun.kototoro.reader.core.ZoomMode
 import org.skepsun.kototoro.reader.ui.pager.ReaderPage
+
+/**
+ * Pushes the two pages of a spread against the center fold so no letterbox gap appears between them.
+ * [index] is the visual (left-to-right) slot. Single-page spreads (cover/solo) keep the default centering.
+ */
+private fun spreadFoldAlignment(spread: DoublePageSpread, index: Int): Alignment? = when {
+    spread.lowerPosition == spread.upperPosition -> null
+    index == 0 -> Alignment.CenterEnd
+    else -> Alignment.CenterStart
+}
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -89,6 +101,7 @@ fun ComposeDoublePageReader(
     isPreloadReductionEnabled: Boolean = false,
     zoomMode: ZoomMode = ZoomMode.FIT_CENTER,
     isCropEnabled: Boolean = false,
+    widePageIds: Set<Long> = emptySet(),
     pageOverlay: @Composable BoxScope.() -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
@@ -96,8 +109,11 @@ fun ComposeDoublePageReader(
     val displayItems = remember(displayedPages, coverPage) {
         buildDoublePageDisplayItems(displayedPages, coverPage = coverPage)
     }
+    val currentWidePageIds by rememberUpdatedState(widePageIds)
     val displayPagePositions = remember(displayItems) { displayItems.map { it.originalPosition } }
-    val spreadModel = remember(displayItems.size) { DoublePageSpreadModel.create(displayItems.size) }
+    val spreadModel = remember(displayItems, widePageIds) {
+        DoublePageSpreadModel.create(displayItems, widePageIds)
+    }
     val spreads = spreadModel.spreads
     LaunchedEffect(displayedPages, coverPage, reverseLayout) {
         PagedShadowValidator.sampleRuntimeParity(
@@ -277,7 +293,7 @@ fun ComposeDoublePageReader(
             val updatedPageKeys = updatedDisplayItems.map {
                 it.page?.readerKey ?: DoublePageSpreadModel.SPACER_KEY
             }
-            val updatedSpreadModel = DoublePageSpreadModel.create(updatedDisplayItems.size)
+            val updatedSpreadModel = DoublePageSpreadModel.create(updatedDisplayItems, currentWidePageIds)
             val anchorSpreadIndex = updatedSpreadModel.resolveAnchorSpreadIndex(
                 pageKeys = updatedPageKeys,
                 anchorPageKey = visibleAnchorPageKey,
@@ -297,7 +313,7 @@ fun ComposeDoublePageReader(
         }
     }
 
-    LaunchedEffect(pageKeys, requestedPage) {
+    LaunchedEffect(pageKeys, spreadModel, requestedPage) {
         if (requestedPage == null && !isRestoringAnchor) {
             val anchorSpreadIndex = spreadModel.resolveAnchorSpreadIndex(
                 pageKeys = pageKeys,
@@ -440,12 +456,13 @@ fun ComposeDoublePageReader(
         Row(
             modifier = modifier.background(Color(spreadBackground)),
         ) {
-            orderedPositions.forEach { position ->
+            orderedPositions.forEachIndexed { index, position ->
                 val page = displayItems[position].page
                 if (page == null) {
                     Box(modifier = Modifier.weight(1f).fillMaxSize())
                 } else {
                     ComposeReaderPage(
+                        pageAlignment = spreadFoldAlignment(spread, index),
                         page = page,
                         imageLoader = imageLoader,
                         imagePipeline = imagePipeline,
@@ -475,7 +492,9 @@ fun ComposeDoublePageReader(
                     )
                 }
             }
-            if (spread.lowerPosition == spread.upperPosition) {
+            if (spread.lowerPosition == spread.upperPosition &&
+                !spread.isFullWidthWidePage(displayItems, widePageIds)
+            ) {
                 Box(modifier = Modifier.weight(1f).fillMaxSize())
             }
         }
@@ -702,12 +721,13 @@ fun ComposeDoublePageReader(
                 Row(
                     modifier = Modifier.fillMaxSize(),
                 ) {
-                    orderedPositions.forEach { position ->
+                    orderedPositions.forEachIndexed { index, position ->
                         val page = displayItems[position].page
                         if (page == null) {
                             Box(modifier = Modifier.weight(1f).fillMaxSize())
                         } else {
                             ComposeReaderPage(
+                                pageAlignment = spreadFoldAlignment(spread, index),
                                 page = page,
                                 imageLoader = imageLoader,
                                 imagePipeline = imagePipeline,
@@ -737,9 +757,11 @@ fun ComposeDoublePageReader(
                             )
                         }
                     }
-                    if (spread.lowerPosition == spread.upperPosition) {
-                    Box(modifier = Modifier.weight(1f).fillMaxSize())
-                }
+                    if (spread.lowerPosition == spread.upperPosition &&
+                        !spread.isFullWidthWidePage(displayItems, widePageIds)
+                    ) {
+                        Box(modifier = Modifier.weight(1f).fillMaxSize())
+                    }
             }
                 when (pageAnimation) {
                     ReaderAnimation.SIMULATION -> ComposeReaderSimulationPageShadow(transform)

@@ -84,6 +84,7 @@ internal fun ComposePagedTelephotoImage(
     onImageSizeResolved: (width: Int, height: Int) -> Unit,
     onImageError: (Throwable) -> Unit,
     onZoomedChanged: (Boolean) -> Unit = {},
+    contentAlignmentOverride: Alignment? = null,
     modifier: Modifier = Modifier,
 ) {
     ComposeTelephotoSubsamplingImage(
@@ -98,7 +99,8 @@ internal fun ComposePagedTelephotoImage(
             ZoomMode.FIT_HEIGHT -> ContentScale.FillHeight
             ZoomMode.FIT_WIDTH -> ContentScale.FillWidth
         },
-        contentAlignment = if (zoomMode == ZoomMode.KEEP_START) Alignment.TopCenter else Alignment.Center,
+        contentAlignment = contentAlignmentOverride
+            ?: if (zoomMode == ZoomMode.KEEP_START) Alignment.TopCenter else Alignment.Center,
         initialZoomMode = zoomMode,
         gestures = if (isZoomEnabled) EnabledZoomGestures.ZoomAndPan else EnabledZoomGestures.None,
         zoomCommand = zoomCommand,

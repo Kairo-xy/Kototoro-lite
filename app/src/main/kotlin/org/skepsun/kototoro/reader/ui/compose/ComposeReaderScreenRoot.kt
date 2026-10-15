@@ -62,6 +62,7 @@ fun ComposeReaderScreenRoot(
     modifier: Modifier = Modifier,
 ) {
     val content by viewModel.content.collectAsStateWithLifecycle()
+    val widePageIds by viewModel.widePageIdsFlow.collectAsStateWithLifecycle()
     val mode by viewModel.readerMode.collectAsStateWithLifecycle()
     val isWebtoonZoomEnabled by viewModel.isWebtoonZooEnabled.collectAsStateWithLifecycle()
     val defaultWebtoonZoomOut by viewModel.defaultWebtoonZoomOut.collectAsStateWithLifecycle(initialValue = 0f)
@@ -201,6 +202,7 @@ fun ComposeReaderScreenRoot(
             )
         } else {
             ComposeDoublePageReader(
+                widePageIds = widePageIds,
                 pages = content.pages,
                 initialPage = initialPosition,
                 reverseLayout = mode == ReaderMode.REVERSED,

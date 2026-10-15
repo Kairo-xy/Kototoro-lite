@@ -329,12 +329,17 @@ class ReaderViewModel @Inject constructor(
 
     private val widePageIds = mutableSetOf<Long>()
 
+    /** Ids of pages detected as wide, whether or not "split wide pages" is enabled. */
+    val widePageIdsFlow = MutableStateFlow<Set<Long>>(emptySet())
+
     private fun listenToDoublePageEvents() {
         launchJob(Dispatchers.Default) {
             pageLoader.widePageDetectedEvent.collect { pageId ->
-                if (!settings.isReaderSplitPagesEnabled) return@collect
                 if (widePageIds.add(pageId)) {
-                    rebuildPages()
+                    widePageIdsFlow.value = widePageIds.toSet()
+                    if (settings.isReaderSplitPagesEnabled) {
+                        rebuildPages()
+                    }
                 }
             }
         }
