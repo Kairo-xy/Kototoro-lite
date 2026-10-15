@@ -62,6 +62,7 @@ object SettingsSyncMerger {
 	fun merge(local: Map<String, SettingEntry>, remote: Map<String, SettingEntry>): Map<String, SettingEntry> {
 		val result = LinkedHashMap<String, SettingEntry>()
 		for (key in local.keys + remote.keys) {
+			if (!isSyncableKey(key)) continue
 			val localEntry = local[key]
 			val remoteEntry = remote[key]
 			val winner = when {

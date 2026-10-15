@@ -100,6 +100,11 @@ internal fun preferenceStorageOp(value: Any?): Pair<PreferenceStorageType, Any>?
         else -> null
     }
 
+/** Removes each key so reset listeners also run on Android versions where clear() is silent. */
+fun SharedPreferences.Editor.removeAll(preferences: SharedPreferences) {
+    preferences.all.keys.forEach { remove(it) }
+}
+
 fun SharedPreferences.Editor.putAll(values: Map<String, *>) {
     values.forEach { (key, value) ->
         val (type, stored) = preferenceStorageOp(value) ?: return@forEach

@@ -149,13 +149,14 @@ class GoogleDriveExtensionSyncTest {
     }
 
     @Test
-    fun `merger combines source states favoring enabled and pinned`() {
+    fun `merger follows the latest source edit and preserves the latest usage`() {
         val localState = SyncSourceState(
             source = "bilibili",
             isEnabled = false,
             isPinned = true,
             sortKey = 2,
-            usedAt = 1000L,
+            usedAt = 3000L,
+            modifiedAt = 1000L,
         )
         val remoteState = SyncSourceState(
             source = "bilibili",
@@ -163,6 +164,7 @@ class GoogleDriveExtensionSyncTest {
             isPinned = false,
             sortKey = 5,
             usedAt = 2000L,
+            modifiedAt = 2000L,
         )
 
         val local = GoogleDriveSyncSnapshot(sourceStates = listOf(localState))
@@ -173,10 +175,11 @@ class GoogleDriveExtensionSyncTest {
         assertEquals(1, merged.sourceStates.size)
         val state = merged.sourceStates[0]
         assertEquals("bilibili", state.source)
-        assertTrue(state.isEnabled, "Should be enabled if either side is enabled")
-        assertTrue(state.isPinned, "Should be pinned if either side is pinned")
+        assertTrue(state.isEnabled, "The latest edit controls enabled state")
+        assertFalse(state.isPinned, "The latest edit can unpin a previously pinned source")
         assertEquals(5, state.sortKey)
-        assertEquals(2000L, state.usedAt)
+        assertEquals(3000L, state.usedAt)
+        assertEquals(2000L, state.modifiedAt)
     }
 
     @Test

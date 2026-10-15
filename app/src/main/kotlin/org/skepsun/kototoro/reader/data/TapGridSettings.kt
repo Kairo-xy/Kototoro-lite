@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.flowOn
 import org.skepsun.kototoro.core.util.ext.getEnumValue
 import org.skepsun.kototoro.core.util.ext.observeChanges
 import org.skepsun.kototoro.core.util.ext.putAll
+import org.skepsun.kototoro.core.util.ext.removeAll
 import org.skepsun.kototoro.core.util.ext.putEnumValue
 import org.skepsun.kototoro.reader.domain.TapGridArea
 import org.skepsun.kototoro.reader.ui.tapgrid.TapAction
@@ -56,13 +57,13 @@ class TapGridSettings @Inject constructor(@ApplicationContext context: Context) 
     fun getAllValues(): Map<String, *> = prefs.all
 
     fun upsertAll(m: Map<String, *>) = prefs.edit {
-        clear()
+        removeAll(prefs)
         putAll(m)
     }
 
     private fun initPrefs(withDefaultValues: Boolean) {
         prefs.edit {
-            clear()
+            removeAll(prefs)
             if (withDefaultValues) {
                 initDefaultActions(this)
             }

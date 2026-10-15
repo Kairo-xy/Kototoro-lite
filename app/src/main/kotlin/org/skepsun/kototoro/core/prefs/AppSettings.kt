@@ -56,6 +56,7 @@ import org.skepsun.kototoro.core.util.ext.getSafeFloat
 import org.skepsun.kototoro.core.util.ext.getSafeInt
 import org.skepsun.kototoro.core.util.ext.observeChanges
 import org.skepsun.kototoro.core.util.ext.putAll
+import org.skepsun.kototoro.core.util.ext.removeAll
 import org.skepsun.kototoro.core.util.ext.putEnumValue
 import org.skepsun.kototoro.core.util.ext.takeIfReadable
 import org.skepsun.kototoro.core.util.ext.toUriOrNull
@@ -2703,7 +2704,7 @@ class AppSettings @Inject constructor(@ApplicationContext private val context: C
 
     fun upsertAll(m: Map<String, *>) {
         prefs.edit {
-            clear()
+            removeAll(prefs)
             putAll(m)
         }
         migrateLegacyUiPreferences()

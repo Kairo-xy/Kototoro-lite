@@ -61,6 +61,14 @@ class SettingsSyncMergerTest : StringSpec({
 		SettingsSyncMerger.isSyncableKey("feed_header") shouldBe true
 	}
 
+    "legacy remote credentials and local paths are removed from the upload merge" {
+        val remote = listOf("reader_translation_api_custom_headers", "local_storage", "app_password", "theme")
+            .associateWith { SettingEntry("s", "legacy", 50L) }
+        val local = mapOf("discord_token" to SettingEntry("s", "local", 100L))
+        val merged = SettingsSyncMerger.mergeStores(mapOf("app" to local), mapOf("app" to remote))
+        merged["app"]?.keys shouldBe setOf("theme")
+    }
+
 	"newer tombstone beats an older value and an older tombstone loses" {
 		val local = mapOf("glass_tuning" to SettingEntry("s", "x", 100L))
 		val remoteDeleted = mapOf("glass_tuning" to SettingEntry.deleted(200L))

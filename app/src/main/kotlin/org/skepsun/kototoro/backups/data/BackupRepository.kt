@@ -235,6 +235,7 @@ class BackupRepository @Inject constructor(
     private val tapGridSettings: TapGridSettings,
     private val mangaSourcesRepository: ContentSourcesRepository,
     private val savedFiltersRepository: SavedFiltersRepository,
+    private val sourceStateModifiedStore: org.skepsun.kototoro.sync.google.domain.SourceStateModifiedStore,
 ) {
 
     private val sourceLocks: org.skepsun.kototoro.settings.sources.lock.SourceLockStore
@@ -666,7 +667,10 @@ class BackupRepository @Inject constructor(
                         getBookmarksDao().upsert(it.bookmarks.map { b -> b.toEntity() })
                     }
 
-                    BackupSection.SOURCES -> sectionInput.readJsonArray<SourceBackup>(serializer()).restoreToDb("SOURCES") {
+                    BackupSection.SOURCES -> sectionInput.readJsonArray<SourceBackup>(serializer()).restoreToDb(
+                        "SOURCES",
+                        trackSourceChanges = true,
+                    ) {
                         // JSON sources have no MangaSourceEntity row; only their lock is restored here.
                         if (!it.source.startsWith("JSON_")) getSourcesDao().upsert(it.toEntity())
                         when (it.lock) {
@@ -1155,6 +1159,7 @@ class BackupRepository @Inject constructor(
         label: String,
         batchSize: Int = RESTORE_TRANSACTION_BATCH_SIZE,
         failFast: Boolean = false,
+        trackSourceChanges: Boolean = false,
         block: suspend MangaDatabase.(T) -> Unit,
     ): CompositeResult {
         val startedAt = SystemClock.elapsedRealtime()
@@ -1166,7 +1171,7 @@ class BackupRepository @Inject constructor(
             if (batch.isEmpty()) return
             val batchStartedAt = SystemClock.elapsedRealtime()
             var batchResult = CompositeResult.EMPTY
-            database.withTransaction {
+            val restoreBatch: suspend () -> Unit = {
                 batch.forEach { item ->
                     if (failFast) {
                         database.block(item)
@@ -1177,6 +1182,11 @@ class BackupRepository @Inject constructor(
                         }
                     }
                 }
+            }
+            if (trackSourceChanges) {
+                sourceStateModifiedStore.withLocalChanges(database, block = restoreBatch)
+            } else {
+                database.withTransaction { restoreBatch() }
             }
             processed += batch.size
             result += batchResult

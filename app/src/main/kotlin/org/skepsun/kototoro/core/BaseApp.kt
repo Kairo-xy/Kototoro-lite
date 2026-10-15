@@ -70,6 +70,8 @@ open class BaseApp : App(), Configuration.Provider, SingletonImageLoader.Factory
         if (ACRA.isACRASenderServiceProcess()) {
             return
         }
+        // Install settings edit listeners before activities can change preferences, including offline.
+        entryPoint.settingsSyncStore()
         entryPoint.settings().reconcileAfterAppUpgrade(BuildConfig.VERSION_CODE)
         AppCompatDelegate.setDefaultNightMode(entryPoint.settings().theme)
         // TLS 1.3 support for Android < 10
@@ -190,6 +192,10 @@ open class BaseApp : App(), Configuration.Provider, SingletonImageLoader.Factory
         fun activityLifecycleCallbacks(): Set<@JvmSuppressWildcards ActivityLifecycleCallbacks>
         fun database(): Provider<MangaDatabase>
         fun settings(): AppSettings
+
+        fun settingsSyncStore(): org.skepsun.kototoro.sync.google.domain.SettingsSyncStore
+
+        fun sourceStateModifiedStore(): org.skepsun.kototoro.sync.google.domain.SourceStateModifiedStore
         fun workerFactory(): HiltWorkerFactory
         fun appValidator(): AppValidator
         fun workScheduleManager(): WorkScheduleManager

@@ -7,7 +7,6 @@ import android.content.IntentFilter
 import android.os.SystemClock
 import android.util.Log
 import androidx.core.content.ContextCompat
-import androidx.room.withTransaction
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.channels.trySendBlocking
 import kotlinx.coroutines.launch
@@ -71,6 +70,7 @@ import org.skepsun.kototoro.core.model.LocalMangaSource
 import org.skepsun.kototoro.core.model.LocalNovelSource
 import org.skepsun.kototoro.core.model.LocalVideoSource
 import org.skepsun.kototoro.space.data.ContentTypeBackfill
+import org.skepsun.kototoro.sync.google.domain.SourceStateModifiedStore
 
 private const val BrowseSourcesTraceTag = "BrowseSourcesTrace"
 
@@ -102,6 +102,7 @@ class ContentSourcesRepository @Inject constructor(
     private val cloudstreamRuntimeManager: org.skepsun.kototoro.cloudstream.runtime.CloudstreamRuntimeManager,
     private val sourceAvailabilityRepository: SourceAvailabilityRepository,
     private val contentTypeBackfill: ContentTypeBackfill,
+    private val sourceStateModifiedStore: SourceStateModifiedStore,
 ) {
 
     private val dao get() = db.getSourcesDao()
@@ -1046,7 +1047,7 @@ class ContentSourcesRepository @Inject constructor(
         if (jsonOff.isNotEmpty()) jsonSourceManager.toggleSourcesBatch(jsonOff, false)
         val nativeLocks = locks.filterKeys { !it.startsWith("JSON_") }
         if (nativeLocks.isNotEmpty()) {
-            db.withTransaction {
+            sourceStateModifiedStore.withLocalChanges(db, nativeLocks.keys) {
                 for ((name, enabled) in nativeLocks) dao.setEnabled(name, enabled, BuildConfig.VERSION_CODE)
             }
         }
@@ -1074,7 +1075,7 @@ class ContentSourcesRepository @Inject constructor(
         if (jsonSourcesToEnable.isNotEmpty()) jsonSourceManager.toggleSourcesBatch(jsonSourcesToEnable, true)
         if (jsonSourcesToDisable.isNotEmpty()) jsonSourceManager.toggleSourcesBatch(jsonSourcesToDisable, false)
 
-        db.withTransaction {
+        sourceStateModifiedStore.withLocalChanges(db) {
             assimilateNewSources()
             for (name in nativeSourcesToEnable) dao.setEnabled(name, true, BuildConfig.VERSION_CODE)
             for (name in nativeSourcesToDisable) dao.setEnabled(name, false, BuildConfig.VERSION_CODE)
@@ -1089,7 +1090,7 @@ class ContentSourcesRepository @Inject constructor(
     }
 
     suspend fun setPositions(sources: List<ContentSource>) {
-        db.withTransaction {
+        sourceStateModifiedStore.withLocalChanges(db) {
             val existing = dao.findAll()
             var nextKey = (existing.maxOfOrNull { it.sortKey } ?: -1) + 1
             dao.insertIfAbsent(sources.distinctBy { it.name }.map { source ->
@@ -1109,6 +1110,12 @@ class ContentSourcesRepository @Inject constructor(
             for ((index, name) in order.withIndex()) {
                 dao.setSortKey(name, index)
             }
+        }
+    }
+
+    suspend fun setSourceSortKey(source: String, sortKey: Int) {
+        sourceStateModifiedStore.withLocalChanges(db, setOf(source)) {
+            dao.setSortKey(source, sortKey)
         }
     }
 
@@ -1240,7 +1247,7 @@ class ContentSourcesRepository @Inject constructor(
         }
 
         if (nativeSources.isNotEmpty()) {
-            db.withTransaction {
+            sourceStateModifiedStore.withLocalChanges(db, nativeSources.toSet()) {
                 for (name in nativeSources) {
                     dao.setEnabled(name, isEnabled, BuildConfig.VERSION_CODE)
                 }
@@ -1265,7 +1272,7 @@ class ContentSourcesRepository @Inject constructor(
         }
 
         if (nativeSources.isNotEmpty()) {
-            db.withTransaction {
+            sourceStateModifiedStore.withLocalChanges(db) {
                 assimilateNewSources()
                 for (name in nativeSources) {
                     dao.setEnabled(name, true, BuildConfig.VERSION_CODE)
@@ -1320,7 +1327,7 @@ class ContentSourcesRepository @Inject constructor(
         }
 
         if (nativeSources.isNotEmpty()) {
-            db.withTransaction {
+            sourceStateModifiedStore.withLocalChanges(db, nativeSources.toSet()) {
                 for (name in nativeSources) {
                     dao.setPinned(name, isPinned, BuildConfig.VERSION_CODE)
                 }

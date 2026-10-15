@@ -142,10 +142,12 @@ class AppBackupAgent : BackupAgent() {
                     ),
                     sourceAvailabilityRepository = SourceAvailabilityRepository(appSettings),
                     contentTypeBackfill = org.skepsun.kototoro.space.data.ContentTypeBackfill(db),
+                    sourceStateModifiedStore = entryPoint.sourceStateModifiedStore(),
                 ),
                 savedFiltersRepository = SavedFiltersRepository(
                     context = applicationContext,
                 ),
+                sourceStateModifiedStore = entryPoint.sourceStateModifiedStore(),
             ),
         )
         try {
@@ -265,10 +267,12 @@ class AppBackupAgent : BackupAgent() {
                         ),
                         sourceAvailabilityRepository = SourceAvailabilityRepository(appSettings),
                         contentTypeBackfill = org.skepsun.kototoro.space.data.ContentTypeBackfill(db),
+                        sourceStateModifiedStore = entryPoint.sourceStateModifiedStore(),
                     ),
                     savedFiltersRepository = SavedFiltersRepository(
                         context = applicationContext,
                     ),
+                    sourceStateModifiedStore = entryPoint.sourceStateModifiedStore(),
                 ),
             )
             destination.delete()

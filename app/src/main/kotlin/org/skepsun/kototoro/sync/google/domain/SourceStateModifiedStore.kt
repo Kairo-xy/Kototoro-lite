@@ -2,57 +2,72 @@ package org.skepsun.kototoro.sync.google.domain
 
 import android.content.Context
 import androidx.core.content.edit
+import androidx.room.withTransaction
 import dagger.hilt.android.qualifiers.ApplicationContext
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import org.skepsun.kototoro.core.db.MangaDatabase
 import org.skepsun.kototoro.core.db.entity.MangaSourceEntity
 import javax.inject.Inject
 import javax.inject.Singleton
 
-/**
- * Tracks when each source's enabled/pinned/sort state was last modified, independently of
- * [MangaSourceEntity.lastUsedAt] (which only changes when a source is used).
- *
- * First-sync policy mirrors [SettingsSyncStore]: on the first run existing sources are recorded at 0 (initial
- * state), afterwards a state that differs from the recorded one is a new change stamped with the current time.
- */
+/** Tracks committed enabled/pinned/sort changes independently of source usage. */
 @Singleton
 class SourceStateModifiedStore @Inject constructor(
-	@ApplicationContext context: Context,
+    @ApplicationContext context: Context,
 ) {
 
-	private val prefs = context.getSharedPreferences("sync_source_state_meta", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences("sync_source_state_meta", Context.MODE_PRIVATE)
+    private val stateMutex = Mutex()
 
-	fun modifiedAt(entities: List<MangaSourceEntity>, now: Long): Map<String, Long> {
-		val initialized = prefs.getBoolean(KEY_INITIALIZED, false)
-		val updates = HashMap<String, String>()
-		val result = HashMap<String, Long>(entities.size)
-		for (entity in entities) {
-			val hash = stateHash(entity.isEnabled, entity.isPinned, entity.sortKey)
-			val stored = prefs.getString(entity.source, null)
-			val storedHash = stored?.substringBefore('|')?.toIntOrNull()
-			val storedAt = stored?.substringAfter('|', "")?.toLongOrNull()
-			val at = when {
-				stored == null -> (if (initialized) now else 0L).also { updates[entity.source] = "$hash|$it" }
-				storedHash == hash && storedAt != null -> storedAt
-				else -> now.also { updates[entity.source] = "$hash|$it" }
-			}
-			result[entity.source] = at
-		}
-		prefs.edit {
-			updates.forEach { (key, value) -> putString(key, value) }
-			if (!initialized) putBoolean(KEY_INITIALIZED, true)
-		}
-		return result
-	}
+    /** Unknown or mismatched states have no known edit time; reading never creates a new edit. */
+    fun modifiedAt(entities: List<MangaSourceEntity>): Map<String, Long> = entities.associate { entity ->
+        val stored = prefs.getString(entity.source, null)
+        val at = if (stored?.substringBefore('|')?.toIntOrNull() == stateHash(entity)) {
+            stored.substringAfter('|', "").toLongOrNull() ?: 0L
+        } else {
+            0L
+        }
+        entity.source to at
+    }
 
-	/** Records a state received from the remote so that applying it is not mistaken for a local change. */
-	fun recordApplied(source: String, enabled: Boolean, pinned: Boolean, sortKey: Int, modifiedAt: Long) {
-		prefs.edit { putString(source, "${stateHash(enabled, pinned, sortKey)}|$modifiedAt") }
-	}
+    /** Serializes DB state and its sidecar metadata across local edits and remote application. */
+    suspend fun <T> withStateLock(block: suspend () -> T): T = stateMutex.withLock { block() }
 
-	private fun stateHash(enabled: Boolean, pinned: Boolean, sortKey: Int): Int =
-		"$enabled:$pinned:$sortKey".hashCode()
+    suspend fun <T> withLocalChanges(
+        database: MangaDatabase,
+        names: Set<String>? = null,
+        block: suspend () -> T,
+    ): T = withStateLock {
+        suspend fun readStates(): List<MangaSourceEntity> {
+            val dao = database.getSourcesDao()
+            return if (names?.size == 1) {
+                listOfNotNull(dao.find(names.single()))
+            } else {
+                dao.findAll().filter { names == null || it.source in names }
+            }
+        }
+        val (result, changed, at) = database.withTransaction {
+            val before = readStates().associateBy { it.source }
+            val result = block()
+            val changed = readStates().filter { entity ->
+                before[entity.source]?.let { stateHash(it) } != stateHash(entity)
+            }
+            Triple(result, changed, System.currentTimeMillis())
+        }
+        // A failed or cancelled transaction must not leave metadata for a rolled-back state.
+        changed.forEach { recordApplied(it.source, it.isEnabled, it.isPinned, it.sortKey, at) }
+        result
+    }
 
-	private companion object {
-		const val KEY_INITIALIZED = "__initialized__"
-	}
+    /** Records a committed remote state without treating it as a new local edit. */
+    fun recordApplied(source: String, enabled: Boolean, pinned: Boolean, sortKey: Int, modifiedAt: Long) {
+        prefs.edit { putString(source, "${stateHash(enabled, pinned, sortKey)}|$modifiedAt") }
+    }
+
+    private fun stateHash(entity: MangaSourceEntity): Int =
+        stateHash(entity.isEnabled, entity.isPinned, entity.sortKey)
+
+    private fun stateHash(enabled: Boolean, pinned: Boolean, sortKey: Int): Int =
+        "$enabled:$pinned:$sortKey".hashCode()
 }

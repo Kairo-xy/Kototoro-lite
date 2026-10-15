@@ -353,7 +353,7 @@ class GoogleDriveSyncRepository @Inject constructor(
                 remoteStores = SettingsSyncMerger.mergeStores(remoteStores, snapshot.stores)
             }
             val now = System.currentTimeMillis()
-            val local = settingsStore.buildLocal(now)
+            val local = settingsStore.buildLocal()
             val merged = SettingsSyncMerger.mergeStores(local, remoteStores)
             val applied = settingsStore.apply(merged)
             Log.d(TAG, "settings sync applied=$applied files=${files.size}")
@@ -504,83 +504,91 @@ class GoogleDriveSyncRepository @Inject constructor(
 
     private suspend fun applyToDatabase(snapshot: GoogleDriveSyncSnapshot): List<String> {
         val norm = snapshot.normalizeToContentV3()
-        database.withTransaction {
-            val contentImport = runSyncStep("apply content") {
-                importSyncContent(norm.content, database.syncContentStore())
-            }
-
-            val categoryIdMapping = LinkedHashMap<Long, Long>()
-            runSyncStep("apply categories") {
-                norm.categories.forEach { category ->
-                    val existing = database.getFavouriteCategoriesDao().findIncludingDeleted(category.id)
-                    if (existing == null || category.deletedAt >= existing.deletedAt) {
-                        database.getFavouriteCategoriesDao().upsert(category.toEntity())
-                    }
-                    categoryIdMapping[category.id] = category.id
+        sourceStateModifiedStore.withStateLock {
+            val appliedSourceStates = mutableListOf<SyncSourceState>()
+            database.withTransaction {
+                val contentImport = runSyncStep("apply content") {
+                    importSyncContent(norm.content, database.syncContentStore())
                 }
-            }
 
-            runSyncStep("apply history") {
-                norm.history.forEach { remote ->
-                    val localMangaId = contentImport.localIdOf(remote.mangaId) ?: return@forEach
-                    if (!database.getMangaDao().contains(localMangaId)) return@forEach
-                    val local = database.getHistoryDao().find(localMangaId)
-                    if (local == null || remote.updatedAt >= local.updatedAt) {
-                        database.getHistoryDao().upsertSync(remote.toEntity(localMangaId))
+                val categoryIdMapping = LinkedHashMap<Long, Long>()
+                runSyncStep("apply categories") {
+                    norm.categories.forEach { category ->
+                        val existing = database.getFavouriteCategoriesDao().findIncludingDeleted(category.id)
+                        if (existing == null || category.deletedAt >= existing.deletedAt) {
+                            database.getFavouriteCategoriesDao().upsert(category.toEntity())
+                        }
+                        categoryIdMapping[category.id] = category.id
                     }
                 }
-            }
 
-            runSyncStep("apply favourites") {
-                norm.favourites.forEach { remote ->
-                    val localMangaId = contentImport.localIdOf(remote.mangaId) ?: return@forEach
-                    val localCategoryId = categoryIdMapping[remote.categoryId] ?: remote.categoryId
-                    if (!database.getMangaDao().contains(localMangaId)) return@forEach
-                    val local = database.getFavouritesDao().find(localMangaId, localCategoryId)
-                    if (local == null || remote.updatedAt >= local.updatedAt) {
-                        database.getFavouritesDao().upsert(remote.toEntity(localMangaId, localCategoryId))
+                runSyncStep("apply history") {
+                    norm.history.forEach { remote ->
+                        val localMangaId = contentImport.localIdOf(remote.mangaId) ?: return@forEach
+                        if (!database.getMangaDao().contains(localMangaId)) return@forEach
+                        val local = database.getHistoryDao().find(localMangaId)
+                        if (local == null || remote.updatedAt >= local.updatedAt) {
+                            database.getHistoryDao().upsertSync(remote.toEntity(localMangaId))
+                        }
                     }
                 }
-            }
 
-            runSyncStep("apply stats") {
-                norm.stats.forEach { remote ->
-                    val localMangaId = contentImport.localIdOf(remote.mangaId) ?: return@forEach
-                    if (!database.getMangaDao().contains(localMangaId)) return@forEach
-                    database.getStatsDao().upsert(remote.toEntity(localMangaId))
-                }
-            }
-
-            runSyncStep("apply feed") {
-                norm.feed.tracks.forEach { track ->
-                    val localMangaId = contentImport.localIdOf(track.mangaId) ?: return@forEach
-                    if (database.getMangaDao().contains(localMangaId)) {
-                        database.mergeTrack(
-                            track.toEntity(localMangaId),
-                        )
+                runSyncStep("apply favourites") {
+                    norm.favourites.forEach { remote ->
+                        val localMangaId = contentImport.localIdOf(remote.mangaId) ?: return@forEach
+                        val localCategoryId = categoryIdMapping[remote.categoryId] ?: remote.categoryId
+                        if (!database.getMangaDao().contains(localMangaId)) return@forEach
+                        val local = database.getFavouritesDao().find(localMangaId, localCategoryId)
+                        if (local == null || remote.updatedAt >= local.updatedAt) {
+                            database.getFavouritesDao().upsert(remote.toEntity(localMangaId, localCategoryId))
+                        }
                     }
                 }
-                norm.feed.logs.forEach { log ->
-                    val localMangaId = contentImport.localIdOf(log.mangaId) ?: return@forEach
-                    if (database.getMangaDao().contains(localMangaId)) {
-                        database.mergeTrackLog(
-                            log.toEntity(localMangaId),
-                        )
+
+                runSyncStep("apply stats") {
+                    norm.stats.forEach { remote ->
+                        val localMangaId = contentImport.localIdOf(remote.mangaId) ?: return@forEach
+                        if (!database.getMangaDao().contains(localMangaId)) return@forEach
+                        database.getStatsDao().upsert(remote.toEntity(localMangaId))
                     }
                 }
-            }
 
-            runSyncStep("apply repositories") {
-                database.restoreRepositories(norm)
+                runSyncStep("apply feed") {
+                    norm.feed.tracks.forEach { track ->
+                        val localMangaId = contentImport.localIdOf(track.mangaId) ?: return@forEach
+                        if (database.getMangaDao().contains(localMangaId)) {
+                            database.mergeTrack(
+                                track.toEntity(localMangaId),
+                            )
+                        }
+                    }
+                    norm.feed.logs.forEach { log ->
+                        val localMangaId = contentImport.localIdOf(log.mangaId) ?: return@forEach
+                        if (database.getMangaDao().contains(localMangaId)) {
+                            database.mergeTrackLog(
+                                log.toEntity(localMangaId),
+                            )
+                        }
+                    }
+                }
+
+                runSyncStep("apply repositories") {
+                    database.restoreRepositories(norm)
+                }
+                runSyncStep("apply source states") {
+                    appliedSourceStates += database.restoreSourceStates(norm)
+                }
+                runSyncStep("apply json sources") {
+                    database.restoreJsonSources(norm)
+                }
+                runSyncStep("prune local sync residue") {
+                    database.pruneLocalSyncResidue()
+                }
             }
-            runSyncStep("apply source states") {
-                database.restoreSourceStates(norm)
-            }
-            runSyncStep("apply json sources") {
-                database.restoreJsonSources(norm)
-            }
-            runSyncStep("prune local sync residue") {
-                database.pruneLocalSyncResidue()
+            appliedSourceStates.forEach { state ->
+                sourceStateModifiedStore.recordApplied(
+                    state.source, state.isEnabled, state.isPinned, state.sortKey, state.modifiedAt,
+                )
             }
         }
         val unrestoredExtensions = runSyncStep("apply extension packages") {
@@ -753,10 +761,10 @@ class GoogleDriveSyncRepository @Inject constructor(
         return database.getExternalExtensionRepoDao().getAll().map(::SyncExtensionRepo)
     }
 
-    private suspend fun dumpSourceStates(): List<SyncSourceState> {
+    private suspend fun dumpSourceStates(): List<SyncSourceState> = sourceStateModifiedStore.withStateLock {
         val entities = database.getSourcesDao().findAll()
-        val modified = sourceStateModifiedStore.modifiedAt(entities, System.currentTimeMillis())
-        return entities.map { SyncSourceState(it, modified[it.source] ?: 0L) }
+        val modified = sourceStateModifiedStore.modifiedAt(entities)
+        entities.map { SyncSourceState(it, modified[it.source] ?: 0L) }
     }
 
     private suspend fun dumpJsonSources(): List<SyncJsonSource> {
@@ -893,9 +901,16 @@ class GoogleDriveSyncRepository @Inject constructor(
         }
     }
 
-    private suspend fun MangaDatabase.restoreSourceStates(snapshot: GoogleDriveSyncSnapshot) {
+    private suspend fun MangaDatabase.restoreSourceStates(snapshot: GoogleDriveSyncSnapshot): List<SyncSourceState> {
+        val applied = mutableListOf<SyncSourceState>()
         snapshot.sourceStates.forEach { state ->
             val existing = getSourcesDao().find(state.source)
+            if (existing != null &&
+                (sourceStateModifiedStore.modifiedAt(listOf(existing))[state.source] ?: 0L) > state.modifiedAt
+            ) {
+                if (state.usedAt > existing.lastUsedAt) getSourcesDao().setLastUsed(state.source, state.usedAt)
+                return@forEach
+            }
             if (existing != null) {
                 getSourcesDao().upsert(
                     existing.copy(
@@ -905,7 +920,6 @@ class GoogleDriveSyncRepository @Inject constructor(
                         lastUsedAt = maxOf(existing.lastUsedAt, state.usedAt),
                     ),
                 )
-                sourceStateModifiedStore.recordApplied(state.source, state.isEnabled, state.isPinned, state.sortKey, state.modifiedAt)
             } else {
                 getSourcesDao().upsert(
                     MangaSourceEntity(
@@ -918,9 +932,10 @@ class GoogleDriveSyncRepository @Inject constructor(
                         cfState = CloudFlareHelper.PROTECTION_NOT_DETECTED,
                     ),
                 )
-                sourceStateModifiedStore.recordApplied(state.source, state.isEnabled, state.isPinned, state.sortKey, state.modifiedAt)
             }
+            applied += state
         }
+        return applied
     }
 
     private suspend fun MangaDatabase.restoreJsonSources(snapshot: GoogleDriveSyncSnapshot) {

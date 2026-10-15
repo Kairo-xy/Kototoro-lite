@@ -26,15 +26,48 @@ class SettingsSyncStore @Inject constructor(
 	)
 	private val meta = context.getSharedPreferences("sync_settings_meta", Context.MODE_PRIVATE)
 
-	/**
-	 * Snapshot of the local settings with per-key modification times.
-	 *
-	 * First-sync policy: on the very first run every existing key is recorded with `at = 0`
-	 * (initial/default state), so any remote entry wins over it. After that, a key that was never seen
-	 * before is a new user change and gets `at = now`. Keys that disappeared from the preferences
-	 * (reset to default) are emitted as tombstones so that a reset converges instead of being undone.
-	 */
-	fun buildLocal(now: Long): Map<String, Map<String, SettingEntry>> {
+	// SharedPreferences keeps weak references; keep listeners alive for the process lifetime.
+	private var applyingRemote = false
+	private val listeners = stores.map { (store, prefs) ->
+		SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+			recordLocalChange(store, prefs, key)
+		}.also(prefs::registerOnSharedPreferenceChangeListener)
+	}
+
+	@Synchronized
+	private fun recordLocalChange(store: String, prefs: SharedPreferences, key: String?) {
+		if (applyingRemote || meta.getString(META_INITIALIZED, null) != "true") return
+		if (key != null && !SettingsSyncMerger.isSyncableKey(key)) return
+		val current = prefs.all
+		val keys = if (key != null) {
+			setOf(key)
+		} else {
+			current.keys + meta.all.keys.filter { it.startsWith("$store/") }.map { it.removePrefix("$store/") }
+		}
+		val updates = HashMap<String, String>()
+		val now = System.currentTimeMillis()
+		for (changedKey in keys) {
+			if (!SettingsSyncMerger.isSyncableKey(changedKey)) continue
+			val metaKey = "$store/$changedKey"
+			val stored = meta.getString(metaKey, null)
+			val encoded = encode(current[changedKey])
+			if (encoded == null) {
+				if (!current.containsKey(changedKey) && stored != null && !stored.startsWith(DELETED_PREFIX)) {
+					updates[metaKey] = "$DELETED_PREFIX$now"
+				}
+			} else {
+				val hash = hashOf(encoded)
+				if (stored?.substringBefore('|')?.toIntOrNull() != hash) {
+					updates[metaKey] = "$hash|$now"
+				}
+			}
+		}
+		saveMeta(updates)
+	}
+
+	/** First-sync/unknown values are initial state; listeners capture subsequent edits and resets. */
+	@Synchronized
+	fun buildLocal(): Map<String, Map<String, SettingEntry>> {
 		val metaUpdates = HashMap<String, String>()
 		val initialized = meta.getString(META_INITIALIZED, null) == "true"
 		val metaAll = meta.all
@@ -52,15 +85,15 @@ class SettingsSyncStore @Inject constructor(
 				val storedAt = stored?.substringAfter('|', "")?.toLongOrNull()
 				val at = when {
 					stored == null -> {
-						val initial = if (initialized) now else 0L
+						val initial = 0L
 						metaUpdates[metaKey] = "$hash|$initial"
 						initial
 					}
 					storedHash == hash && storedAt != null -> storedAt
 					else -> {
-						// Changed locally, or re-created after a deletion.
-						metaUpdates[metaKey] = "$hash|$now"
-						now
+						// No matching edit metadata: do not invent an edit time during sync.
+						metaUpdates[metaKey] = "$hash|0"
+						0L
 					}
 				}
 				entries[key] = SettingEntry(t = encoded.first, v = encoded.second, at = at)
@@ -71,9 +104,9 @@ class SettingsSyncStore @Inject constructor(
 				val key = metaKey.removePrefix(prefix)
 				if (key in current || !SettingsSyncMerger.isSyncableKey(key)) continue
 				val deletedAt = if (stored.startsWith(DELETED_PREFIX)) {
-					stored.removePrefix(DELETED_PREFIX).toLongOrNull() ?: now
+					stored.removePrefix(DELETED_PREFIX).toLongOrNull() ?: 0L
 				} else {
-					now.also { metaUpdates[metaKey] = "$DELETED_PREFIX$now" }
+					0L.also { metaUpdates[metaKey] = "${DELETED_PREFIX}0" }
 				}
 				entries[key] = SettingEntry.deleted(deletedAt)
 			}
@@ -84,7 +117,17 @@ class SettingsSyncStore @Inject constructor(
 		return result
 	}
 
+	@Synchronized
 	fun apply(merged: Map<String, Map<String, SettingEntry>>): Int {
+		applyingRemote = true
+		return try {
+			applyEntries(merged)
+		} finally {
+			applyingRemote = false
+		}
+	}
+
+	private fun applyEntries(merged: Map<String, Map<String, SettingEntry>>): Int {
 		val metaUpdates = HashMap<String, String>()
 		var applied = 0
 		for ((store, entries) in merged) {
@@ -94,16 +137,17 @@ class SettingsSyncStore @Inject constructor(
 			val removals = ArrayList<String>()
 			for ((key, entry) in entries) {
 				if (!SettingsSyncMerger.isSyncableKey(key)) continue
+				val storedAt = meta.getString("$store/$key", null)?.substringAfter('|', "")?.toLongOrNull() ?: 0L
+				if (storedAt > entry.at) continue
 				if (entry.isDeleted) {
 					if (localValues.containsKey(key)) removals += key
 					metaUpdates["$store/$key"] = "$DELETED_PREFIX${entry.at}"
 					continue
 				}
-				if (encode(localValues[key]) == (entry.t to entry.v)) continue
 				val value = decode(entry) ?: continue
 				val encoded = encode(value) ?: continue
-				writes[key] = value
 				metaUpdates["$store/$key"] = "${hashOf(encoded)}|${entry.at}"
+				if (encode(localValues[key]) != encoded) writes[key] = value
 			}
 			if (writes.isEmpty() && removals.isEmpty()) continue
 			prefs.edit {

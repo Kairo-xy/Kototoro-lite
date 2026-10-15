@@ -7,7 +7,6 @@ import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.test.runTest
-import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -22,9 +21,11 @@ class GoogleDriveSyncCancellationTest {
         every { isSignedIn } returns true
     }
     private val auth = mockk<GoogleDriveSyncAuth>()
-    private val api = mockk<GoogleDriveSyncApi>()
+    private val api = mockk<GoogleDriveSyncApi> {
+        coEvery { findSettingsSyncFiles(any()) } returns emptyList()
+    }
     private val repository = GoogleDriveSyncRepository(
-        context = mockk(),
+        context = mockk(relaxed = true),
         settings = settings,
         appSettings = mockk(),
         auth = auth,
@@ -90,12 +91,12 @@ class GoogleDriveSyncCancellationTest {
     }
 
     @Test
-    fun `ordinary remote deletion failures remain best effort`() = runTest {
+    fun `partial remote deletion failure preserves local sync state`() = runTest {
         coEvery { auth.requireAccessToken() } returns "token"
         coEvery { api.findCurrentSyncFiles("token") } returns listOf(GoogleDriveSyncApi.DriveFile("id"))
         coEvery { api.delete("token", "id") } throws GoogleDriveSyncApiException(403, "forbidden")
-        assertEquals(GoogleDriveSyncResult.Success, repository.deleteRemoteData())
-        verify { settings.lastSyncTimestamp = 0L }
-        verify { settings.isDirty = false }
+        assertTrue(repository.deleteRemoteData() is GoogleDriveSyncResult.Error)
+        verify(exactly = 0) { settings.lastSyncTimestamp = 0L }
+        verify(exactly = 0) { settings.isDirty = false }
     }
 }
