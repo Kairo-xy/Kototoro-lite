@@ -3,7 +3,7 @@ package org.skepsun.kototoro.core.source
 import kotlinx.serialization.Serializable
 
 @Serializable
-enum class SourcePreferenceKind { INFO, TEXT, TOGGLE, CHOICE, MULTI_CHOICE, GROUP, UNSUPPORTED }
+enum class SourcePreferenceKind { INFO, TEXT, TOGGLE, CHOICE, MULTI_CHOICE, GROUP, ACTION, UNSUPPORTED }
 
 @Serializable
 data class SourcePreferenceChoice(val title: String, val value: String)
@@ -21,6 +21,7 @@ data class SourcePreferenceNode(
     val defaultValue: SourcePreferenceValue? = null,
     val choices: List<SourcePreferenceChoice> = emptyList(),
     val children: List<SourcePreferenceNode> = emptyList(),
+    val isSecret: Boolean = false,
 )
 
 /** Revision identifies live native control objects, not merely a hash of their displayed labels. */

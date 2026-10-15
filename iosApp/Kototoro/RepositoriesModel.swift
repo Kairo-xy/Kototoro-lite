@@ -403,8 +403,12 @@ final class RepositoriesModel: ObservableObject {
     }
     private func fingerprint(_ catalog: IosRepositoryCatalog) -> String {
         let normUrl = Self.normalizeRepoURL(catalog.url)
-        let key = catalog.signingKey.isEmpty ? normUrl : catalog.signingKey
-        return SHA256.hash(data: Data(key.utf8))
+        let key = catalog.signingKey.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if key.count == 64 && key.allSatisfy({ $0.isHexDigit }) {
+            return key
+        }
+        let fallbackKey = key.isEmpty ? normUrl : key
+        return SHA256.hash(data: Data(fallbackKey.utf8))
             .map { String(format: "%02x", $0) }.joined()
     }
     private func kotlinBytes(_ data: Data) -> KotlinByteArray {

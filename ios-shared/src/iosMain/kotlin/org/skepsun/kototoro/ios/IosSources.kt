@@ -547,6 +547,10 @@ class IosSources(
     suspend fun updateChoices(screen: IosPreferenceScreen, node: IosPreferenceNode, choices: Set<String>): IosPreferenceResult =
         update(screen, node, SourcePreferenceValue.TextSet(choices))
 
+    @Throws(Exception::class)
+    suspend fun triggerAction(screen: IosPreferenceScreen, node: IosPreferenceNode): IosPreferenceResult =
+        update(screen, node, SourcePreferenceValue.Action())
+
     private suspend fun update(screen: IosPreferenceScreen, node: IosPreferenceNode, value: SourcePreferenceValue): IosPreferenceResult {
         val result = runtime.updatePreference(screen.sourceName, screen.revision, node.id, value)
         return IosPreferenceResult(result.status.label(), IosPreferenceScreen(result.screen))

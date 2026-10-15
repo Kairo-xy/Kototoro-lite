@@ -34,6 +34,15 @@ internal class ParserSourceConfig(private val preferences: SourcePreferences) : 
     fun put(key: ConfigKey<*>, value: SourcePreferenceValue?): Boolean =
         preferences.edit(SourcePreferenceEdit(changes = mapOf(key.key to value)))
 
+    fun getString(key: String, defaultValue: String = ""): String =
+        (preferences.snapshot()[key] as? SourcePreferenceValue.Text)?.value ?: defaultValue
+
+    fun putString(key: String, value: String): Boolean =
+        preferences.edit(SourcePreferenceEdit(changes = mapOf(key to SourcePreferenceValue.Text(value))))
+
+    fun remove(key: String): Boolean =
+        preferences.edit(SourcePreferenceEdit(changes = mapOf(key to null)))
+
     companion object {
         internal fun isValidDomain(value: String): Boolean =
             value.isNotEmpty() && !value.contains('/') && !value.contains(' ') &&

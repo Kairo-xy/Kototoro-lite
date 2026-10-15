@@ -4,6 +4,10 @@ import kotlinx.serialization.json.*
 import org.skepsun.kototoro.core.db.entity.ExternalExtensionRepoEntity
 import org.skepsun.kototoro.extensions.repo.*
 
+import kotlinx.cinterop.ExperimentalForeignApi
+import kotlinx.cinterop.addressOf
+import kotlinx.cinterop.usePinned
+
 data class IosRepository(val kind: String, val url: String, val title: String, val fingerprint: String)
 class IosExtension internal constructor(internal val value: ExtensionStoreIndex.Extension) {
     val id: String get() = value.packageName
@@ -113,7 +117,12 @@ class IosRepositories(private val library: IosLibrary) {
             previous.signingKeyFingerprint == catalog.url.hashCode().toString(16) ||
             type == ExternalExtensionType.JAR
         )
-        require(previous == null || isLegacyPseudoFingerprint || previous.signingKeyFingerprint == fingerprint) {
+        val matchesPrevious = previous == null ||
+            isLegacyPseudoFingerprint ||
+            previous.signingKeyFingerprint.equals(fingerprint, ignoreCase = true) ||
+            (catalog.signingKey.isNotBlank() && previous.signingKeyFingerprint.equals(catalog.signingKey.trim(), ignoreCase = true)) ||
+            (catalog.signingKey.isNotBlank() && previous.signingKeyFingerprint.equals(sha256Hex(catalog.signingKey.trim()), ignoreCase = true))
+        require(matchesPrevious) {
             "仓库签名信息已变化，请核对地址"
         }
         val duplicate = dao.getByFingerprint(type, fingerprint)
@@ -169,6 +178,23 @@ class IosRepositories(private val library: IosLibrary) {
                 segments.isNotEmpty() && !segments.last().contains('.') -> segments.last()
                 else -> host
             }
+        }
+
+        @OptIn(ExperimentalForeignApi::class)
+        internal fun sha256Hex(text: String): String {
+            if (text.isEmpty()) return ""
+            val bytes = text.encodeToByteArray()
+            val digest = UByteArray(32)
+            bytes.usePinned { pinnedBytes ->
+                digest.usePinned { pinnedDigest ->
+                    platform.CoreCrypto.CC_SHA256(
+                        pinnedBytes.addressOf(0),
+                        bytes.size.toUInt(),
+                        pinnedDigest.addressOf(0)
+                    )
+                }
+            }
+            return digest.joinToString("") { (it.toInt() and 0xFF).toString(16).padStart(2, '0') }
         }
     }
 }

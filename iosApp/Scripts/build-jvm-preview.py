@@ -146,6 +146,10 @@ def main():
     output = OUTPUT if simulator else APP / "build/jvm-device"
     output.mkdir(parents=True, exist_ok=True)
     profile = arguments.profile.resolve() if arguments.profile else None
+    if not profile and not simulator:
+        real_api_profile = (APP / "build/jvm-real-api").resolve()
+        if real_api_profile.exists():
+            profile = real_api_profile
     if profile:
         for required in ["java_bundle/lib/modules", "lib", "sources/config.json"]:
             if not (profile / required).exists():

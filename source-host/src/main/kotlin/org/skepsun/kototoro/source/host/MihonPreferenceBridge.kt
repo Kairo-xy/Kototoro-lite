@@ -132,6 +132,7 @@ class MihonPreferenceBridge @JvmOverloads constructor(
         is SourcePreferenceValue.Integer -> value.value
         is SourcePreferenceValue.LongInteger -> value.value
         is SourcePreferenceValue.FloatBits -> Float.fromBits(value.bits)
+        is SourcePreferenceValue.Action -> value.timestamp
     }
 
     private fun objectMethod(receiver: Any, method: Method, arguments: Array<out Any?>?): Any? = when (method.name) {

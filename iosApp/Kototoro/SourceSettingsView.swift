@@ -33,6 +33,7 @@ struct SourceSettingsView: View {
     @State private var browsing: BrowserTarget?
     @State private var homepage: String?
     @State private var site: IosVideoSiteSettings?
+    @State private var updatingNodeId: String?
 
     private var isCms: Bool { source.kind == "video" }
 
@@ -126,10 +127,28 @@ struct SourceSettingsView: View {
                 LabeledContent { Text("\(node.selected.count) 项") } label: { titled(node) }
             }
             .disabled(!node.enabled)
+        case "ACTION":
+            Button {
+                updatingNodeId = node.id
+                Task {
+                    await update(node) { try await runtime.triggerAction(screen: $0, node: node) }
+                    updatingNodeId = nil
+                }
+            } label: {
+                HStack {
+                    titled(node)
+                    Spacer()
+                    if updatingNodeId == node.id {
+                        ProgressView()
+                    }
+                }
+            }
+            .disabled(!node.enabled || updatingNodeId != nil)
+            .accessibilityIdentifier("sourceSettings.node.\(node.id)")
         case "TEXT":
             Button {
                 editing = TextEdit(id: node.id, title: node.title, summary: node.summary, value: node.text,
-                                   placeholder: node.defaultText, isUserAgent: node.isUserAgent)
+                                   placeholder: node.defaultText, isUserAgent: node.isUserAgent, isSecret: node.isSecret)
             } label: {
                 LabeledContent {
                     Text(textSummary(node)).lineLimit(1).truncationMode(.middle)
@@ -155,6 +174,9 @@ struct SourceSettingsView: View {
     }
 
     private func textSummary(_ node: IosPreferenceNode) -> String {
+        if node.isSecret {
+            return node.text.isEmpty ? "未设置" : "••••••••"
+        }
         // Parser keys store their default as a value (a full User-Agent), extensions as an empty string.
         if node.text.isEmpty || node.text == node.defaultText { return "默认" }
         return node.isUserAgent ? (UserAgentPresets.title(for: node.text) ?? "自定义") : node.text
@@ -261,6 +283,7 @@ struct TextEdit: Identifiable {
     let value: String
     let placeholder: String
     let isUserAgent: Bool
+    var isSecret: Bool = false
 }
 
 /// One text setting; User-Agent fields add the presets and a reset to the source's default.
@@ -275,12 +298,19 @@ private struct TextEditSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField(edit.placeholder.isEmpty ? edit.title : edit.placeholder, text: $text, axis: .vertical)
-                        .lineLimit(1...6)
-                        .autocorrectionDisabled()
-                        .textInputAutocapitalization(.never)
-                        .keyboardType(edit.isUserAgent ? .default : .URL)
-                        .accessibilityIdentifier("sourceSettings.text")
+                    if edit.isSecret {
+                        SecureField(edit.placeholder.isEmpty ? edit.title : edit.placeholder, text: $text)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .accessibilityIdentifier("sourceSettings.text")
+                    } else {
+                        TextField(edit.placeholder.isEmpty ? edit.title : edit.placeholder, text: $text, axis: .vertical)
+                            .lineLimit(1...6)
+                            .autocorrectionDisabled()
+                            .textInputAutocapitalization(.never)
+                            .keyboardType(edit.isUserAgent ? .default : .URL)
+                            .accessibilityIdentifier("sourceSettings.text")
+                    }
                 } footer: {
                     if !edit.summary.isEmpty { Text(edit.summary) }
                 }
@@ -303,7 +333,7 @@ private struct TextEditSheet: View {
                         }
                         Button("恢复来源默认值", role: .destructive) { text = "" }
                     }
-                } else if text != edit.placeholder {
+                } else if !edit.isSecret && text != edit.placeholder {
                     // Domains and other texts: back to what the source itself uses.
                     Section { Button("恢复来源默认值", role: .destructive) { text = edit.placeholder } }
                 }
@@ -316,7 +346,8 @@ private struct TextEditSheet: View {
                     Button("保存") {
                         saving = true
                         Task {
-                            if await save(text.trimmingCharacters(in: .whitespacesAndNewlines)) { dismiss() }
+                            let valueToSave = edit.isSecret ? text : text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if await save(valueToSave) { dismiss() }
                             saving = false
                         }
                     }

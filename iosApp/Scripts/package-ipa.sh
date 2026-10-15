@@ -47,6 +47,9 @@ if [[ -n "$runtime" ]]; then
     python3 - "$runtime/sources/config.json" "$release_runtime/sources/config.json" <<'PY'
 import json, sys
 config = json.load(open(sys.argv[1]))
+platform_class = config.get("platformClass")
+if platform_class != "org.skepsun.kototoro.ios.compat.MihonIosPlatform":
+    sys.exit(f"ERROR: Cannot package Release IPA with fixture platformClass '{platform_class}'. Must use 'org.skepsun.kototoro.ios.compat.MihonIosPlatform'.")
 config["jars"] = []
 config["plugins"] = []
 json.dump(config, open(sys.argv[2], "w"), indent=2)

@@ -24,6 +24,9 @@ sealed interface SourcePreferenceValue {
 
     @Serializable @SerialName("stringSet")
     data class TextSet(val values: Set<String>) : SourcePreferenceValue
+
+    @Serializable @SerialName("action")
+    data class Action(val timestamp: Long = 0) : SourcePreferenceValue
 }
 
 /** Clear happens before the final per-key changes, regardless of editor call order; null removes a key. */

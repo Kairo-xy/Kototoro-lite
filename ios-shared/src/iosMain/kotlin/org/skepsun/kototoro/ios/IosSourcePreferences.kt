@@ -22,9 +22,10 @@ class IosPreferenceNode internal constructor(internal val value: SourcePreferenc
     val key: String? get() = value.key
     val title: String get() = value.title
     val summary: String get() = value.summary
-    /** INFO, TEXT, TOGGLE, CHOICE, MULTI_CHOICE, GROUP or UNSUPPORTED. */
+    /** INFO, TEXT, TOGGLE, CHOICE, MULTI_CHOICE, GROUP, ACTION or UNSUPPORTED. */
     val kind: String get() = value.kind.name
     val enabled: Boolean get() = value.enabled
+    val isSecret: Boolean get() = value.isSecret
     val text: String get() = when (val current = value.value) {
         is SourcePreferenceValue.Text -> current.value
         is SourcePreferenceValue.Integer -> current.value.toString()
