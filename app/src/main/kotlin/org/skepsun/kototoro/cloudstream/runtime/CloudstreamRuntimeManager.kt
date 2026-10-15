@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.APIHolder
 import com.lagradost.cloudstream3.CloudStreamApp
 import com.lagradost.cloudstream3.MainAPI
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.actions.VideoClickActionHolder
 import com.lagradost.cloudstream3.plugins.BasePlugin
 import com.lagradost.cloudstream3.plugins.Plugin
 import com.lagradost.cloudstream3.utils.ExtractorApi
@@ -29,6 +30,7 @@ import org.skepsun.kototoro.core.network.webview.WebViewExecutor
 import java.io.File
 import java.io.InputStreamReader
 import java.lang.ref.WeakReference
+import java.security.MessageDigest
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -61,11 +63,10 @@ class CloudstreamRuntimeManager @Inject constructor(
         File(context.codeCacheDir, "cloudstream/dex")
     }
 
+    @Synchronized
     fun initialize() {
         writeDiagnostic("initialize:start")
-        setContext(WeakReference(context as Any))
-        CloudStreamApp.context = context
-        configureCloudstreamNetwork()
+        configureCloudstreamEnvironment()
         val pluginsDir = File(File(context.filesDir, "cloudstream"), "plugins").apply { mkdirs() }
         val pluginFiles = pluginsDir.listFiles()
             ?.filter { it.isFile && (it.extension.equals("cs3", ignoreCase = true) || it.extension.equals("zip", ignoreCase = true)) }
@@ -125,7 +126,9 @@ class CloudstreamRuntimeManager @Inject constructor(
         )
     }
 
-    private fun configureCloudstreamNetwork() {
+    private fun configureCloudstreamEnvironment() {
+        setContext(WeakReference(context as Any))
+        CloudStreamApp.context = context
         val cloudstreamUserAgent = com.lagradost.cloudstream3.USER_AGENT
         CloudstreamRequestContext.userAgent = cloudstreamUserAgent
         app.baseClient = contentHttpClient.newBuilder()
@@ -151,8 +154,28 @@ class CloudstreamRuntimeManager @Inject constructor(
         return _sources.value.firstOrNull { it.name == name }
     }
 
-    private fun loadPlugin(file: File) {
-        val manifest = readManifest(file) ?: return
+    /** Activate before committing install metadata; failed updates restore the previous archive and runtime. */
+    @Synchronized
+    fun installPlugin(download: File, archiveName: String, packageName: String) {
+        require(archiveName.isNotBlank() && File(archiveName).name == archiveName) { "Invalid Cloudstream archive name" }
+        val directory = File(File(context.filesDir, "cloudstream"), "plugins").apply { mkdirs() }
+        val target = File(directory, archiveName)
+        configureCloudstreamEnvironment()
+        try {
+            replaceCloudstreamPluginArchive(download, target) {
+                loadPlugin(target, packageName)
+                check(loadedPlugins.containsKey(target.absolutePath)) { "Cloudstream plugin did not load: $archiveName" }
+            }
+        } catch (error: Throwable) {
+            // File rollback completes before rebuilding the previous runtime. Keep the original failure visible.
+            runCatching { initialize() }.exceptionOrNull()?.let(error::addSuppressed)
+            throw error
+        }
+        publishSources()
+    }
+
+    private fun loadPlugin(file: File, packageName: String = file.inferPackageName()) {
+        val manifest = requireNotNull(readManifest(file)) { "Missing Cloudstream plugin manifest: ${file.name}" }
         writeDiagnostic(
             "load:start file=${file.name} class=${manifest.pluginClassName} version=${manifest.version} requiresResources=${manifest.requiresResources}",
         )
@@ -177,22 +200,28 @@ class CloudstreamRuntimeManager @Inject constructor(
         val providerCountBefore = synchronized(APIHolder.allProviders) { APIHolder.allProviders.size }
         val extractorCountBefore = synchronized(extractorApis) { extractorApis.size }
         plugin.filename = preparedFile.absolutePath
-        if (manifest.requiresResources && plugin is Plugin) {
-            plugin.resources = loadPluginResources(preparedFile)
+        val providers = try {
+            if (manifest.requiresResources && plugin is Plugin) {
+                plugin.resources = loadPluginResources(preparedFile)
+            }
+            if (plugin is Plugin) {
+                plugin.load(context)
+            } else {
+                plugin.load()
+            }
+            synchronized(APIHolder.allProviders) {
+                APIHolder.allProviders.filter { it.sourcePlugin == plugin.filename }
+            }.also { apis -> apis.forEach(MainAPI::init) }
+        } catch (error: Throwable) {
+            // A plugin can register providers/extractors before throwing from load() or init().
+            removePluginRegistrations(plugin.filename)
+            runCatching { plugin.beforeUnload() }
+            preparedFile.delete()
+            throw error
         }
-        if (plugin is Plugin) {
-            plugin.load(context)
-        } else {
-            plugin.load()
-        }
-        val providers = synchronized(APIHolder.allProviders) {
-            APIHolder.allProviders.filter { it.sourcePlugin == plugin.filename }
-        }
-        providers.forEach(MainAPI::init)
         val registeredExtractors = synchronized(extractorApis) {
             extractorApis.filter { it.sourcePlugin == plugin.filename }
         }
-        val packageName = file.inferPackageName()
         loadedPlugins[file.absolutePath] = LoadedCloudstreamPlugin(
             filePath = file.absolutePath,
             plugin = plugin,
@@ -220,16 +249,23 @@ class CloudstreamRuntimeManager @Inject constructor(
         runCatching { loaded.plugin.beforeUnload() }
             .onFailure { Log.w(TAG, "Cloudstream plugin beforeUnload failed for ${loaded.filePath}", it) }
 
-        loaded.providers.forEach(APIHolder::removePluginMapping)
+        removePluginRegistrations(loaded.plugin.filename)
+        File(loaded.preparedFilePath).delete()
+        writeDiagnostic("unload:done file=${File(filePath).name}")
+    }
+
+    private fun removePluginRegistrations(filename: String?) {
+        if (filename == null) return
         synchronized(APIHolder.allProviders) {
-            APIHolder.allProviders.removeIf { it.sourcePlugin == loaded.plugin.filename }
+            APIHolder.allProviders.filter { it.sourcePlugin == filename }.forEach(APIHolder::removePluginMapping)
+            APIHolder.allProviders.removeIf { it.sourcePlugin == filename }
         }
         synchronized(extractorApis) {
-            extractorApis.removeIf { it.sourcePlugin == loaded.plugin.filename }
+            extractorApis.removeIf { it.sourcePlugin == filename }
         }
-        File(loaded.preparedFilePath).delete()
-        publishSources()
-        writeDiagnostic("unload:done file=${File(filePath).name}")
+        synchronized(VideoClickActionHolder.allVideoClickActions) {
+            VideoClickActionHolder.allVideoClickActions.removeIf { it.sourcePlugin == filename }
+        }
     }
 
     @Suppress("DEPRECATION")
@@ -321,11 +357,20 @@ class CloudstreamRuntimeManager @Inject constructor(
     }
 
     private fun File.runtimeSignature(): String {
-        return "${length()}:${lastModified()}"
+        val digest = MessageDigest.getInstance("SHA-256")
+        inputStream().use { input ->
+            val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val count = input.read(buffer)
+                if (count < 0) break
+                digest.update(buffer, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it) }
     }
 
     private fun File.runtimeSignatureHash(): String {
-        return runtimeSignature().hashCode().toUInt().toString(16)
+        return runtimeSignature().take(16)
     }
 
     private data class PluginManifest(

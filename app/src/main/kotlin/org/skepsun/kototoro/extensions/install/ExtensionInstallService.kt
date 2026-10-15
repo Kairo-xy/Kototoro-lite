@@ -148,10 +148,11 @@ class ExtensionInstallService @Inject constructor(
                     cause = IllegalStateException(compatibility.reason),
                 )
             }
-            val pluginsDir = File(File(context.filesDir, "cloudstream"), "plugins").apply { mkdirs() }
-            val pluginFile = File(pluginsDir, extension.archiveName)
-            outputFile.copyTo(pluginFile, overwrite = true)
-            outputFile.delete()
+            try {
+                cloudstreamRuntimeManager.installPlugin(outputFile, extension.archiveName, extension.pkgName)
+            } finally {
+                outputFile.delete()
+            }
             context.getSharedPreferences("cloudstream_plugin_versions", Context.MODE_PRIVATE)
                 .edit()
                 .putLong(extension.pkgName, extension.versionCode)
@@ -162,7 +163,6 @@ class ExtensionInstallService @Inject constructor(
                 .putString("${extension.pkgName}:archive", extension.archiveName)
                 .putString("${extension.pkgName}:icon", extension.iconUrl)
                 .apply()
-            cloudstreamRuntimeManager.initialize()
             return ExtensionInstallResult.Completed
         }
 

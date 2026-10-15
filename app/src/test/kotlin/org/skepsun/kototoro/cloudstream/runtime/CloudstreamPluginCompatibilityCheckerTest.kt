@@ -5,6 +5,7 @@ import io.kotest.matchers.collections.shouldContainExactly
 import io.kotest.matchers.shouldBe
 import io.kotest.matchers.types.shouldBeInstanceOf
 import java.io.ByteArrayOutputStream
+import java.io.File
 import java.nio.file.Files
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
@@ -68,7 +69,100 @@ class CloudstreamPluginCompatibilityCheckerTest : FunSpec({
 
 		result.missingHostClasses shouldBe emptyList()
 	}
+
+    test("existing host class with a missing method is rejected before plugin activation") {
+        val result = CloudstreamPluginCompatibilityChecker.inspect(
+            createPluginArchive(createExecutableMethodDex(
+                "Lcom/lagradost/cloudstream3/CommonActivity;", "showToast",
+                listOf("Ljava/lang/String;", "Ljava/lang/Integer;"),
+            )),
+            CloudstreamPluginCompatibilityChecker::class.java.classLoader!!,
+        ).shouldBeInstanceOf<CloudstreamPluginCompatibility.Incompatible>()
+
+        result.missingHostClasses shouldBe emptyList()
+        result.reason.contains("CommonActivity.showToast") shouldBe true
+    }
+
+    test("an executable call to an available host method is accepted") {
+        CloudstreamPluginCompatibilityChecker.inspect(
+            createPluginArchive(createExecutableMethodDex(
+                "Lcom/lagradost/cloudstream3/MainAPI;", "setMainUrl", listOf("Ljava/lang/String;"),
+            )),
+            CloudstreamPluginCompatibilityChecker::class.java.classLoader!!,
+        ) shouldBe CloudstreamPluginCompatibility.Compatible
+    }
+
+    test("wrong overload of an existing host method is rejected") {
+        CloudstreamPluginCompatibilityChecker.inspect(
+            createPluginArchive(createExecutableMethodDex(
+                "Lcom/lagradost/cloudstream3/MainAPI;", "setMainUrl", listOf("Ljava/lang/Integer;"),
+            )),
+            CloudstreamPluginCompatibilityChecker::class.java.classLoader!!,
+        ).shouldBeInstanceOf<CloudstreamPluginCompatibility.Incompatible>()
+    }
+
+    test("bundled real video plugin stays compatible") {
+        CloudstreamPluginCompatibilityChecker.inspect(
+            File("src/androidTest/assets/IdlixProvider.cs3"),
+            CloudstreamPluginCompatibilityChecker::class.java.classLoader!!,
+        ) shouldBe CloudstreamPluginCompatibility.Compatible
+    }
 })
+
+private fun createExecutableMethodDex(owner: String, method: String, parameters: List<String>): ByteArray {
+    val descriptors = listOf("Ltest/Plugin;", owner, "V") + parameters
+    val strings = descriptors + listOf("run", method)
+    val stringIdsOffset = 112
+    val typeIdsOffset = stringIdsOffset + strings.size * 4
+    val prototypeOffset = typeIdsOffset + descriptors.size * 4
+    val methodIdsOffset = prototypeOffset + 12
+    val classDefsOffset = methodIdsOffset + 16
+    val classDataOffset = classDefsOffset + 32
+    val parameterOffset = classDataOffset + 8
+    val codeOffset = 320
+    val stringDataOffset = codeOffset + 24
+    val stringData = ByteArrayOutputStream()
+    val stringOffsets = strings.map { value ->
+        val offset = stringDataOffset + stringData.size()
+        stringData.write(value.length)
+        stringData.write(value.toByteArray())
+        stringData.write(0)
+        offset
+    }
+    return ByteArray(stringDataOffset + stringData.size()).apply {
+        "dex".toByteArray().copyInto(this)
+        writeInt(0x38, strings.size)
+        writeInt(0x3c, stringIdsOffset)
+        writeInt(0x40, descriptors.size)
+        writeInt(0x44, typeIdsOffset)
+        writeInt(0x48, 1)
+        writeInt(0x4c, prototypeOffset)
+        writeInt(0x58, 2)
+        writeInt(0x5c, methodIdsOffset)
+        writeInt(0x60, 1)
+        writeInt(0x64, classDefsOffset)
+        stringOffsets.forEachIndexed { index, offset -> writeInt(stringIdsOffset + index * 4, offset) }
+        descriptors.indices.forEach { writeInt(typeIdsOffset + it * 4, it) }
+        writeInt(prototypeOffset + 4, 2)
+        writeInt(prototypeOffset + 8, parameterOffset)
+        writeInt(parameterOffset, parameters.size)
+        parameters.indices.forEach { writeShort(parameterOffset + 4 + it * 2, 3 + it) }
+        writeShort(methodIdsOffset, 0)
+        writeInt(methodIdsOffset + 4, descriptors.size)
+        writeShort(methodIdsOffset + 8, 1)
+        writeInt(methodIdsOffset + 12, descriptors.size + 1)
+        writeInt(classDefsOffset, 0)
+        writeInt(classDefsOffset + 24, classDataOffset)
+        byteArrayOf(0, 0, 1, 0, 0, 1, 0xc0.toByte(), 2).copyInto(this, classDataOffset)
+        writeShort(codeOffset, 3)
+        writeInt(codeOffset + 12, 4)
+        writeShort(codeOffset + 16, 0x306e)
+        writeShort(codeOffset + 18, 1)
+        writeShort(codeOffset + 20, 0x210)
+        writeShort(codeOffset + 22, 0x0e)
+        stringData.toByteArray().copyInto(this, stringDataOffset)
+    }
+}
 
 private fun createPluginArchive(typeDescriptors: List<String>) =
 	createPluginArchive(createDex(typeDescriptors))

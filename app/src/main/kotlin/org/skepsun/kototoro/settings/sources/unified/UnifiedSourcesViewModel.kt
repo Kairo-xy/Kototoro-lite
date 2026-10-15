@@ -90,7 +90,6 @@ import javax.inject.Inject
 
 private const val TAG = "UnifiedSourcesVM"
 private const val REFRESH_PACKAGES_TIMEOUT_MS = 30_000L
-private const val SOURCE_TEST_TIMEOUT_MS = 45_000L
 private const val SOURCE_TEST_MAX_PARALLELISM = 3
 /** Coalesces bursts of catalog inputs into one rebuild (install progress ticks, DB churn). */
 private const val CATALOG_RECOMPOSE_COALESCE_MS = 150L
@@ -1102,55 +1101,33 @@ class UnifiedSourcesViewModel @Inject constructor(
             results.forEach { (item, outcome) ->
                 sourceAvailabilityRepository.setAvailability(
                     item.source,
-                    if (outcome.isAvailable) ContentSourceAvailability.AVAILABLE else ContentSourceAvailability.EMPTY,
+                    outcome.availability,
                 )
             }
             logTestSummary(results)
             emitMessage(
                 appContext.getString(
-                    R.string.source_test_completed,
+                    R.string.source_test_completed_with_unverified,
                     results.count { it.second.isAvailable },
-                    results.count { !it.second.isAvailable },
+                    results.count { it.second.availability == ContentSourceAvailability.EMPTY },
+                    results.count { it.second.availability == ContentSourceAvailability.UNKNOWN },
                 ),
             )
         }
     }
 
-    private data class SourceTestOutcome(
-        val isAvailable: Boolean,
-        val failure: String?,
-    )
-
     private suspend fun testSource(item: UnifiedSourceItem, semaphore: Semaphore): SourceTestOutcome {
-        val result = runCatchingCancellable {
-            semaphore.withPermit {
-                withTimeoutOrNull(SOURCE_TEST_TIMEOUT_MS) {
-                    val repository = contentRepositoryFactory.create(item.source)
-                    repository.getList(
-                        offset = 0,
-                        order = repository.defaultSortOrder,
-                        filter = ContentListFilter.EMPTY,
-                    ).isNotEmpty()
-                }
-            }
+        val outcome = semaphore.withPermit {
+            probeSourceAvailability(item.source, { contentRepositoryFactory.create(item.source) })
         }
-        val exception = result.exceptionOrNull()
-        val isAvailable = result.getOrDefault(false) == true
-        val failure = when {
-            exception != null -> exception.javaClass.simpleName
-            result.getOrNull() == null -> "timeout"
-            !isAvailable -> "empty"
-            else -> null
-        }
-        if (failure != null) {
+        if (outcome.failure != null) {
             Log.w(
                 TAG,
                 "source_test_failed source=${item.source.name} type=${item.source::class.simpleName} " +
-                    "failure=$failure error=${exception?.javaClass?.simpleName} " +
-                    "msg=${exception?.message?.take(160)}",
+                    "failure=${outcome.failure}",
             )
         }
-        return SourceTestOutcome(isAvailable = isAvailable, failure = failure)
+        return outcome
     }
 
     private fun logTestSummary(results: List<Pair<UnifiedSourceItem, SourceTestOutcome>>) {
@@ -1158,7 +1135,9 @@ class UnifiedSourcesViewModel @Inject constructor(
         Log.w(
             TAG,
             "source_test_summary total=${results.size} available=${results.count { it.second.isAvailable }} " +
-                "unavailable=${results.count { !it.second.isAvailable }} failures=$failureCounts",
+                "unavailable=${results.count { it.second.availability == ContentSourceAvailability.EMPTY }} " +
+                "unverified=${results.count { it.second.availability == ContentSourceAvailability.UNKNOWN }} " +
+                "failures=$failureCounts",
         )
     }
 

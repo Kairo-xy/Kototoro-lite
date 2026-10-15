@@ -2841,6 +2841,7 @@
     <string name="source_test_unavailable">不可用</string>
     <string name="source_untested">未测试</string>
     <string name="source_test_completed">源测试完成：%1$d 个可用，%2$d 个不可用</string>
+    <string name="source_test_completed_with_unverified">源测试完成：%1$d 个可用，%2$d 个不可用，%3$d 个未能验证</string>
     <string name="source_empty_badge">空源</string>
     <string name="source_empty_badge_short">空</string>
     <string name="show_empty_sources">显示空源</string>

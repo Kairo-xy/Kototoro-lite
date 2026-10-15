@@ -10,7 +10,7 @@ object CloudstreamPluginCompatibilityChecker {
         hostClassLoader: ClassLoader,
     ): CloudstreamPluginCompatibility {
         return runCatching {
-            val referencedHostClasses = ZipFile(pluginFile).use { zip ->
+            val references = ZipFile(pluginFile).use { zip ->
                 val dexEntries = zip.entries().asSequence()
                     .filterNot { it.isDirectory }
                     .filter { it.name.endsWith(".dex", ignoreCase = true) }
@@ -18,24 +18,33 @@ object CloudstreamPluginCompatibilityChecker {
                 require(dexEntries.isNotEmpty()) { "Plugin archive does not contain DEX bytecode" }
                 dexEntries
                     .asSequence()
-                    .flatMap { entry ->
+                    .map { entry ->
                         zip.getInputStream(entry).use { input ->
-                            DexExecutableTypeDescriptorReader.read(input.readBytes()).asSequence()
+                            DexExecutableTypeDescriptorReader.readReferences(input.readBytes())
                         }
                     }
-                    .mapNotNull(::cloudstreamClassName)
-                    .toSortedSet()
+                    .toList()
             }
+            val referencedHostClasses = references.flatMap { it.types }.mapNotNull(::cloudstreamClassName).toSortedSet()
             val missingClasses = referencedHostClasses.filterNot { className ->
                 runCatching { hostClassLoader.loadClass(className) }.isSuccess
             }
-            if (missingClasses.isEmpty()) {
-                CloudstreamPluginCompatibility.Compatible
-            } else {
+            if (missingClasses.isNotEmpty()) {
                 CloudstreamPluginCompatibility.Incompatible(
                     reason = "Requires unsupported Cloudstream host classes: ${missingClasses.joinToString()}",
                     missingHostClasses = missingClasses,
                 )
+            } else {
+                val missingMethods = references.flatMap { it.methods }.distinct()
+                    .filter { it.owner.startsWith(CLOUDSTREAM_DESCRIPTOR_PREFIX) }
+                    .filterNot { it.isAvailable(hostClassLoader) }
+                if (missingMethods.isEmpty()) {
+                    CloudstreamPluginCompatibility.Compatible
+                } else {
+                    CloudstreamPluginCompatibility.Incompatible(
+                        reason = "Requires unsupported Cloudstream host methods: ${missingMethods.joinToString()}",
+                    )
+                }
             }
         }.getOrElse { error ->
             CloudstreamPluginCompatibility.Incompatible(
@@ -67,31 +76,104 @@ sealed interface CloudstreamPluginCompatibility {
     ) : CloudstreamPluginCompatibility
 }
 
+internal data class DexExecutableReferences(
+    val types: Set<String>,
+    val methods: Set<DexMethodReference>,
+)
+
+internal data class DexMethodReference(
+    val owner: String,
+    val name: String,
+    val parameters: List<String>,
+    val returnType: String,
+) {
+    fun isAvailable(loader: ClassLoader): Boolean = runCatching {
+        val type = loader.loadClass(owner.removePrefix("L").removeSuffix(";").replace('/', '.'))
+        if (name == "<init>") {
+            type.declaredConstructors.any { it.parameterTypes.map(Class<*>::dexDescriptor) == parameters }
+        } else {
+            generateSequence(type) { it.superclass }.any { current ->
+                (current.declaredMethods.asSequence() + current.methods.asSequence()).any { method ->
+                    method.name == name && method.parameterTypes.map(Class<*>::dexDescriptor) == parameters &&
+                        method.returnType.dexDescriptor() == returnType
+                }
+            }
+        }
+    }.getOrDefault(false)
+
+    override fun toString(): String = "${owner.removePrefix("L").removeSuffix(";").replace('/', '.')}.$name" +
+        "(${parameters.joinToString("")})$returnType"
+}
+
+private fun Class<*>.dexDescriptor(): String = when {
+    isArray -> name.replace('.', '/')
+    !isPrimitive -> "L${name.replace('.', '/')};"
+    else -> when (this) {
+        java.lang.Void.TYPE -> "V"
+        java.lang.Boolean.TYPE -> "Z"
+        java.lang.Byte.TYPE -> "B"
+        java.lang.Character.TYPE -> "C"
+        java.lang.Short.TYPE -> "S"
+        java.lang.Integer.TYPE -> "I"
+        java.lang.Long.TYPE -> "J"
+        java.lang.Float.TYPE -> "F"
+        java.lang.Double.TYPE -> "D"
+        else -> error("Unknown primitive type: $name")
+    }
+}
+
 object DexExecutableTypeDescriptorReader {
 
-    fun read(data: ByteArray): List<String> {
+    fun read(data: ByteArray): List<String> = readReferences(data).types.sorted()
+
+    internal fun readReferences(data: ByteArray): DexExecutableReferences {
         require(data.size >= DEX_HEADER_SIZE && data.startsWith(DEX_MAGIC)) { "Invalid DEX header" }
         val strings = Table(size = data.uint(STRING_IDS_SIZE_OFFSET), offset = data.uint(STRING_IDS_OFFSET), itemSize = 4)
         val types = Table(size = data.uint(TYPE_IDS_SIZE_OFFSET), offset = data.uint(TYPE_IDS_OFFSET), itemSize = 4)
         val fields = Table(size = data.uint(FIELD_IDS_SIZE_OFFSET), offset = data.uint(FIELD_IDS_OFFSET), itemSize = 8)
         val methods = Table(size = data.uint(METHOD_IDS_SIZE_OFFSET), offset = data.uint(METHOD_IDS_OFFSET), itemSize = 8)
+        val prototypes = Table(size = data.uint(0x48), offset = data.uint(0x4c), itemSize = 12)
         val classes = Table(size = data.uint(CLASS_DEFS_SIZE_OFFSET), offset = data.uint(CLASS_DEFS_OFFSET), itemSize = 32)
         data.validate(strings)
         data.validate(types)
         data.validate(fields)
         data.validate(methods)
+        data.validate(prototypes)
         data.validate(classes)
         val typeDescriptors = List(types.size) { index ->
             data.string(strings, data.uint(types.itemOffset(index)))
         }
-        return buildSet {
-            for (classIndex in 0 until classes.size) {
-                val classDataOffset = data.uint(classes.itemOffset(classIndex) + CLASS_DATA_OFFSET)
-                if (classDataOffset != 0) {
-                    data.readClassData(classDataOffset, fields, methods, typeDescriptors, this)
-                }
+        val referencedTypes = mutableSetOf<String>()
+        val referencedMethods = mutableSetOf<DexMethodReference>()
+        for (classIndex in 0 until classes.size) {
+            val classDataOffset = data.uint(classes.itemOffset(classIndex) + CLASS_DATA_OFFSET)
+            if (classDataOffset != 0) {
+                data.readClassData(
+                    classDataOffset, fields, methods, typeDescriptors, referencedTypes,
+                    onMethod = { index ->
+                        val methodOffset = methods.itemOffset(index)
+                        val prototypeIndex = data.ushort(methodOffset + 2)
+                        require(prototypeIndex in 0 until prototypes.size) { "Invalid DEX prototype index" }
+                        val prototypeOffset = prototypes.itemOffset(prototypeIndex)
+                        val parametersOffset = data.uint(prototypeOffset + 8)
+                        val parameters = if (parametersOffset == 0) emptyList() else {
+                            val count = data.uint(parametersOffset)
+                            require(count >= 0 && count.toLong() * 2 + parametersOffset + 4 <= data.size) {
+                                "Invalid DEX parameter list"
+                            }
+                            List(count) { typeDescriptors[data.ushort(parametersOffset + 4 + it * 2)] }
+                        }
+                        referencedMethods += DexMethodReference(
+                            owner = typeDescriptors[data.ushort(methodOffset)],
+                            name = data.string(strings, data.uint(methodOffset + 4)),
+                            parameters = parameters,
+                            returnType = typeDescriptors[data.uint(prototypeOffset + 4)],
+                        )
+                    },
+                )
             }
-        }.sorted()
+        }
+        return DexExecutableReferences(referencedTypes, referencedMethods)
     }
 
     private fun ByteArray.readClassData(
@@ -100,6 +182,7 @@ object DexExecutableTypeDescriptorReader {
         methods: Table,
         typeDescriptors: List<String>,
         destination: MutableSet<String>,
+        onMethod: (Int) -> Unit,
     ) {
         val cursor = Cursor(offset)
         val staticFieldsSize = uleb128(cursor)
@@ -110,8 +193,8 @@ object DexExecutableTypeDescriptorReader {
             uleb128(cursor)
             uleb128(cursor)
         }
-        readMethods(cursor, directMethodsSize, fields, methods, typeDescriptors, destination)
-        readMethods(cursor, virtualMethodsSize, fields, methods, typeDescriptors, destination)
+        readMethods(cursor, directMethodsSize, fields, methods, typeDescriptors, destination, onMethod)
+        readMethods(cursor, virtualMethodsSize, fields, methods, typeDescriptors, destination, onMethod)
     }
 
     private fun ByteArray.readMethods(
@@ -121,6 +204,7 @@ object DexExecutableTypeDescriptorReader {
         methods: Table,
         typeDescriptors: List<String>,
         destination: MutableSet<String>,
+        onMethod: (Int) -> Unit,
     ) {
         var methodIndex = 0
         repeat(count) {
@@ -129,7 +213,7 @@ object DexExecutableTypeDescriptorReader {
             uleb128(cursor)
             val codeOffset = uleb128(cursor)
             if (codeOffset != 0) {
-                readCode(codeOffset, fields, methods, typeDescriptors, destination)
+                readCode(codeOffset, fields, methods, typeDescriptors, destination, onMethod)
             }
         }
     }
@@ -140,6 +224,7 @@ object DexExecutableTypeDescriptorReader {
         methods: Table,
         typeDescriptors: List<String>,
         destination: MutableSet<String>,
+        onMethod: (Int) -> Unit,
     ) {
         require(offset >= 0 && offset + CODE_ITEM_HEADER_SIZE <= size) { "Invalid DEX code offset" }
         val instructionCount = uint(offset + INSNS_SIZE_OFFSET)
@@ -166,6 +251,7 @@ object DexExecutableTypeDescriptorReader {
                     val methodIndex = ushort(instructionOffset + 2)
                     require(methodIndex in 0 until methods.size) { "Invalid DEX method reference" }
                     addTypeDescriptor(ushort(methods.itemOffset(methodIndex)), typeDescriptors, destination)
+                    onMethod(methodIndex)
                 }
             }
             instructionIndex += width
