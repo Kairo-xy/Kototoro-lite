@@ -36,6 +36,7 @@ import org.skepsun.kototoro.parsers.model.ContentSource
 import org.skepsun.kototoro.parsers.model.SortOrder
 import org.skepsun.kototoro.source.host.SourceImageStore
 import java.io.IOException
+import java.nio.file.Path
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 
@@ -48,6 +49,7 @@ class ParserSourceRuntime(
     private val registry: ParserPluginRegistry,
     private val platform: ParserPlatform,
     private val images: SourceImageStore? = null,
+    private val ebookAssets: Path? = null,
 ) : SourceRuntime {
     private val requests = ParserImageRequests(platform)
     private val settings = ConcurrentHashMap<String, ParserPreferences>()
@@ -107,7 +109,17 @@ class ParserSourceRuntime(
                 return@execute SourceChapterContent(content.html, content.images.map { SourceContentImage(it.url, it.headers) })
             }
             // Parsers that only publish pages carry each chunk of text as an HTML data: URL.
-            handle.parser.getPages(parserChapter).mapNotNull { dataHtml(it.url) }.joinToString("\n")
+            val pages = handle.parser.getPages(parserChapter)
+            val epub = pages.singleOrNull()?.takeIf {
+                it.preview.equals("EPUB", ignoreCase = true) || "EPUB" in chapter.ebookFormats ||
+                    it.url.substringBefore('?').endsWith(".epub", ignoreCase = true)
+            }
+            if (epub != null) {
+                val assets = ebookAssets ?: throw SourceOperationUnsupportedException()
+                val url = handle.parser.getPageUrl(epub)
+                return@execute ParserEpubContent(requests, assets).load(handle.parser, url, chapter.title.orEmpty())
+            }
+            pages.mapNotNull { dataHtml(it.url) }.joinToString("\n")
                 .takeIf(String::isNotBlank)?.let { SourceChapterContent(it) }
         }
 
@@ -162,7 +174,7 @@ class ParserSourceRuntime(
     override suspend fun getPreferences(sourceName: String): SourcePreferenceScreen = execute(sourceName) { handle ->
         val keys = ArrayList<ConfigKey<*>>().also { handle.parser.onCreateConfig(it) }
         val config = ParserSourceConfig(platform.preferences.open(ParserLoaderContext.namespace(sourceName)))
-        ParserPreferences(handle.info.source, keys, config).also { settings[sourceName] = it }.screen()
+        ParserPreferences(handle.info.source, keys, config, handle.parser).also { settings[sourceName] = it }.screen()
     }
 
     override suspend fun updatePreference(

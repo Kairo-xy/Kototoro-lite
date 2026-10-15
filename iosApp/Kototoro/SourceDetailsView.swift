@@ -197,6 +197,7 @@ final class SourceDetailsModel: ObservableObject {
 struct SourceDetailsView: View {
     @EnvironmentObject private var library: LibraryModel
     @EnvironmentObject private var sources: SourcesModel
+    @EnvironmentObject private var downloads: ReaderDownloadQueue
     @StateObject private var model: SourceDetailsModel
     @State private var playing: PlaybackRequest?
     @State private var reading: PlaybackRequest?
@@ -219,6 +220,11 @@ struct SourceDetailsView: View {
     @State private var metadataRequest: UUID?
     private var shownContent: IosSourceContent { metadataContent ?? model.details ?? model.content }
     @State private var showingChaptersSheet = false
+    @State private var selectingChapters = false
+    @State private var selectedChapterIDs = Set<String>()
+    @State private var showingChapterDownloads = false
+    @State private var chapterDownloadError: String?
+    @State private var chapterDownloadStatus: String?
     private enum DetailsTab: Int, CaseIterable {
         case chapters = 0
         case thumbnails = 1
@@ -295,6 +301,7 @@ struct SourceDetailsView: View {
             ReaderPresence.shared.detailDisappear()
         }
         .onChange(of: selectedTab) { _, tab in
+            finishChapterSelection()
             if tab == .bookmarks {
                 Task { await refreshBookmarks() }
             }
@@ -413,7 +420,7 @@ struct SourceDetailsView: View {
                 }
             }
         }
-        .sheet(isPresented: $showingChaptersSheet) {
+        .sheet(isPresented: $showingChaptersSheet, onDismiss: { finishChapterSelection() }) {
             if let details = model.details ?? (model.content.chapterCount > 0 ? model.content : nil) {
                 chaptersSheet(details)
             }
@@ -1137,6 +1144,23 @@ struct SourceDetailsView: View {
             }
             .navigationTitle(sheetTitle)
             .navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                if selectingChapters && selectedTab == .chapters {
+                    Button {
+                        enqueueChapters(details, chapters: model.chapterList(query: chapterQuery, newestFirst: newestFirst)
+                            .filter { selectedChapterIDs.contains($0.id) })
+                    } label: {
+                        Label("下载所选（\(selectedChapterIDs.count)）", systemImage: "arrow.down.circle")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(selectedChapterIDs.isEmpty)
+                    .accessibilityIdentifier("details.chapters.downloadSelected")
+                    .padding().background(.regularMaterial)
+                }
+            }
+            .onChange(of: chapterQuery) { _, _ in selectedChapterIDs.removeAll() }
+            .onChange(of: model.selectedBranch) { _, _ in selectedChapterIDs.removeAll() }
             .toolbar {
                 if !model.isVideo {
                     ToolbarItem(placement: .principal) {
@@ -1159,8 +1183,32 @@ struct SourceDetailsView: View {
                 }
             }
         }
+        .sheet(isPresented: $showingChapterDownloads) { ReaderDownloadsSheet() }
+        .alert("无法下载", isPresented: Binding(get: { chapterDownloadError != nil },
+                                            set: { if !$0 { chapterDownloadError = nil } })) {
+            Button("好") { chapterDownloadError = nil }
+        } message: { Text(chapterDownloadError ?? "") }
         .presentationDetents([.medium, .large])
         .presentationDragIndicator(.visible)
+    }
+
+    private func finishChapterSelection() {
+        selectingChapters = false
+        selectedChapterIDs.removeAll()
+    }
+
+    private func toggleChapterSelection(_ chapter: IosSourceChapter) {
+        selectingChapters = true
+        if !selectedChapterIDs.insert(chapter.id).inserted { selectedChapterIDs.remove(chapter.id) }
+    }
+
+    private func enqueueChapters(_ details: IosSourceContent, chapters: [IosSourceChapter]) {
+        guard !chapters.isEmpty else { return }
+        do {
+            try downloads.enqueue(content: details, chapters: chapters)
+            chapterDownloadStatus = "已加入下载队列：\(chapters.count) 章"
+            finishChapterSelection()
+        } catch { chapterDownloadError = error.localizedDescription }
     }
 
     private func bookmarksList(_ details: IosSourceContent) -> some View {
@@ -1330,6 +1378,28 @@ struct SourceDetailsView: View {
         let current = resumeChapter()
         let currentIndex = current.flatMap { chapter in model.chapters.firstIndex { $0.id == chapter.id } }
         Section {
+            HStack {
+                if selectingChapters {
+                    Button(selectedChapterIDs.count == visible.count ? "取消全选" : "全选") {
+                        selectedChapterIDs = selectedChapterIDs.count == visible.count ? [] : Set(visible.map(\.id))
+                    }
+                    .accessibilityIdentifier("details.chapters.selectAll")
+                    Spacer()
+                    Text("已选 \(selectedChapterIDs.count) 章").font(.caption).foregroundStyle(.secondary)
+                    Button("取消") { finishChapterSelection() }
+                } else {
+                    Button("选择", systemImage: "checkmark.circle") { selectingChapters = true }
+                        .disabled(visible.isEmpty)
+                        .accessibilityIdentifier("details.chapters.select")
+                    Spacer()
+                    Button("下载队列", systemImage: "arrow.down.circle") { showingChapterDownloads = true }
+                        .accessibilityIdentifier("details.chapters.downloads")
+                }
+            }
+            .buttonStyle(.borderless)
+            if let chapterDownloadStatus {
+                Text(chapterDownloadStatus).font(.caption).foregroundStyle(.secondary)
+            }
             if model.chapters.count > 20 {
                 TextField("搜索章节", text: $chapterQuery).textFieldStyle(.roundedBorder)
                     .listRowSeparator(.hidden)
@@ -1346,15 +1416,23 @@ struct SourceDetailsView: View {
                 let isCurrent = chapter.id == current?.id
                 let isRead = !isCurrent && index != nil && currentIndex != nil && index! < currentIndex!
                 Button {
-                    openChapter(chapter, from: details)
+                    if selectingChapters { toggleChapterSelection(chapter) }
+                    else { openChapter(chapter, from: details) }
                 } label: {
                     HStack(spacing: 10) {
+                        if selectingChapters {
+                            Image(systemName: selectedChapterIDs.contains(chapter.id) ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(selectedChapterIDs.contains(chapter.id) ? Color.accentColor : .secondary)
+                        }
                         VStack(alignment: .leading, spacing: 2) {
                             Text(chapter.title).font(isCurrent ? .body.weight(.semibold) : .body)
                                 .foregroundStyle(isRead ? .secondary : .primary)
                                 .lineLimit(2)
                             if let subtitle = Self.chapterSubtitle(chapter) {
                                 Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            if let entry = downloads.entry(content: details, chapter: chapter) {
+                                Text(entry.status).font(.caption).foregroundStyle(.secondary).lineLimit(1)
                             }
                         }
                         Spacer(minLength: 0)
@@ -1367,6 +1445,15 @@ struct SourceDetailsView: View {
                 .buttonStyle(.plain)
                 .listRowBackground(isCurrent ? Color.accentColor.opacity(0.12) : nil)
                 .accessibilityIdentifier("chapter.\(chapter.id)")
+                .accessibilityValue(selectingChapters ? (selectedChapterIDs.contains(chapter.id) ? "已选择" : "未选择") : "")
+                .contextMenu {
+                    Button("下载本章", systemImage: "arrow.down.circle") { enqueueChapters(details, chapters: [chapter]) }
+                    Button("选择章节", systemImage: "checkmark.circle") { toggleChapterSelection(chapter) }
+                }
+                .swipeActions(edge: .trailing) {
+                    Button("下载", systemImage: "arrow.down.circle") { enqueueChapters(details, chapters: [chapter]) }
+                        .tint(.accentColor)
+                }
             }
         } header: {
             HStack {

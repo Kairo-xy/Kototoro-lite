@@ -9,6 +9,8 @@ import kotlinx.serialization.json.floatOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import org.skepsun.kototoro.core.source.SourceChapterContent
+import org.skepsun.kototoro.core.source.SourceContentImage
 import okio.FileSystem
 import okio.Path
 import okio.Path.Companion.toPath
@@ -69,6 +71,50 @@ class LocalBookReader(
     fun entry(file: Path, entry: String): ByteArray {
         val zip = fileSystem.openZip(file)
         return zip.read(("/" + entry).toPath()) { readByteArray() }
+    }
+
+    /** The chapter's XHTML body, with its pictures extracted next to the work and referenced as file URLs. */
+    fun chapterContent(file: Path, part: LocalChapter, publishImage: (String, ByteArray) -> String): SourceChapterContent {
+        val document = part.document ?: throw IllegalArgumentException("章节不存在")
+        val xhtml = entry(file, document).decodeToString()
+        val whole = Regex("<body[^>]*>(.*)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+            .find(xhtml)?.groupValues?.get(1) ?: xhtml
+        // A section runs from its anchor element to the next section's; markup cut open there is tolerated by readers.
+        val start = part.section?.let { LocalBookReader.anchorPosition(whole, it) } ?: 0
+        val end = part.sectionEnd?.let { LocalBookReader.anchorPosition(whole, it) }?.takeIf { it >= start } ?: whole.length
+        val body = whole.substring(start, end)
+        val images = mutableListOf<SourceContentImage>()
+        val html = Regex("<(img|image)\\b([^>]*?)(src|xlink:href|href)\\s*=\\s*([\"'])([^\"']+)\\4([^>]*)>",
+            RegexOption.IGNORE_CASE).replace(body) { match ->
+            val target = resolveHref(document, match.groupValues[5])
+            val bytes = runCatching { entry(file, target) }.getOrNull() ?: return@replace ""
+            val url = publishImage(target, bytes)
+            images += SourceContentImage(url)
+            "<img src=\"$url\">"
+        }
+        return SourceChapterContent(stylesheets(file, document, xhtml) + html, images)
+    }
+
+    /**
+     * The document's style sheets (linked files and `<style>` elements of its head) as one leading `<style>` element,
+     * so readers can apply the book's layout to the body.
+     */
+    private fun stylesheets(file: Path, document: String, xhtml: String): String {
+        val head = Regex("<head\\b[^>]*>([\\s\\S]*?)</head\\s*>", RegexOption.IGNORE_CASE)
+            .find(xhtml)?.groupValues?.get(1) ?: return ""
+        // Linked files and <style> elements, in the order the head lists them.
+        val sheets = mutableListOf<Pair<Int, String>>()
+        LocalXml.tags(head, "link").forEach { link ->
+            if (link["rel"]?.contains("stylesheet", ignoreCase = true) != true) return@forEach
+            val href = link["href"] ?: return@forEach
+            runCatching { entry(file, resolveHref(document, href)).decodeToString() }
+                .getOrNull()?.let { sheets += link.start to it }
+        }
+        Regex("<style\\b[^>]*>([\\s\\S]*?)</style\\s*>", RegexOption.IGNORE_CASE)
+            .findAll(head).forEach { sheets += it.range.first to it.groupValues[1] }
+        val css = sheets.sortedBy { it.first }.joinToString("\n") { it.second }
+        // A style sheet never contains "</style>"; drop it in case one does, so it cannot end the element early.
+        return if (css.isBlank()) "" else "<style>" + css.replace("</style", "") + "</style>"
     }
 
     /** The whole TXT as text, UTF-8 first (with or without BOM), the platform's legacy decoder otherwise. */

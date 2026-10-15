@@ -136,7 +136,8 @@ class MihonIosPlatform : SourceHostPreferenceUiPlatform, SourceHostRuntimePlatfo
             try { registry.close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
             throw failure
         }
-        val runtime = ParserSourceRuntime(registry, parsers, images)
+        val runtime = ParserSourceRuntime(registry, parsers, images,
+            ebookAssets = (images as? org.skepsun.kototoro.source.host.FileSourceImageStore)?.directory)
         return SourceHostRuntimes(
             routes = listOf(RoutedSourceRuntime.Route(registry::owns, runtime)),
             titles = { registry.sources().associate { it.source.name to it.title } },

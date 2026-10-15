@@ -38,7 +38,9 @@ internal class FixtureParser(context: ContentLoaderContext, source: ContentSourc
         },
     )
 
-    override suspend fun getPages(chapter: ContentChapter): List<ContentPage> = (0 until 3).map { index ->
+    override suspend fun getPages(chapter: ContentChapter): List<ContentPage> = if (EbookFormat.EPUB in chapter.ebookFormats) {
+        listOf(ContentPage(id = chapter.id, url = "http://$domain/book.epub", preview = "EPUB", source = source))
+    } else (0 until 3).map { index ->
         ContentPage(id = chapter.id * 100 + index, url = "http://$domain/img/${chapter.id}/$index.png", preview = null, source = source)
     }
 
@@ -48,7 +50,7 @@ internal class FixtureParser(context: ContentLoaderContext, source: ContentSourc
 
     /** A novel source answers with a whole chapter body instead of image pages. */
     override suspend fun getChapterContent(chapter: ContentChapter): NovelChapterContent? =
-        if (source.contentType == ContentType.NOVEL) NovelChapterContent(
+        if (source.contentType == ContentType.NOVEL && chapter.ebookFormats.isEmpty()) NovelChapterContent(
             html = "<p>Body of ${chapter.title}</p><img src=\"http://$domain/illustration/${chapter.id}.png\">" +
                 (1..40).joinToString("") { "<p>Paragraph $it of ${chapter.title}: a scrollable novel chapter.</p>" },
             images = listOf(NovelChapterContent.NovelImage("http://$domain/illustration/${chapter.id}.png", mapOf("X-Test" to "1"))),

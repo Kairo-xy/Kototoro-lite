@@ -86,6 +86,7 @@ dependencies {
 	api project(':parser-api')
 	api project(':core-source')
 	api project(':source-host')
+	implementation project(':core-local')
 	implementation "org.jetbrains.kotlinx:kotlinx-coroutines-core:${libs.versions.coroutines.get()}"
 	implementation tsukiRuntimeJar
 	add(tsukiRuntimeSource.name, libs.tsuki)

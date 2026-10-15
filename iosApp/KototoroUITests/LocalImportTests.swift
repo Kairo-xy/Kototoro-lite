@@ -13,6 +13,32 @@ final class LocalImportTests: XCTestCase {
     }
 
     @MainActor
+    func testDetailsChapterSelectionDownloadsWithoutOpeningReader() throws {
+        importFile(source: "LOCAL", file: "fixture_reader_chapters", reuse: true)
+        app.buttons["章节"].tap()
+        let select = app.buttons["details.chapters.select"]
+        XCTAssertTrue(select.waitForExistence(timeout: 5), "章节面板必须提供多选入口")
+        select.tap()
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chapter."))
+        XCTAssertEqual(rows.count, 2)
+        rows.element(boundBy: 0).tap()
+        rows.element(boundBy: 1).tap()
+        XCTAssertTrue(app.buttons["details.chapters.downloadSelected"].label.contains("2"))
+        XCTAssertFalse(app.images["reader.image"].exists)
+        app.buttons["details.chapters.selectAll"].tap()
+        XCTAssertFalse(app.buttons["details.chapters.downloadSelected"].isEnabled)
+        app.buttons["details.chapters.selectAll"].tap()
+        rows.element(boundBy: 1).tap()
+        XCTAssertTrue(app.buttons["details.chapters.downloadSelected"].label.contains("1"))
+        app.buttons["details.chapters.downloadSelected"].tap()
+        XCTAssertTrue(select.waitForExistence(timeout: 5))
+        app.buttons["details.chapters.downloads"].tap()
+        let first = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "fixture_reader_chapters")).firstMatch
+        XCTAssertTrue(first.waitForExistence(timeout: 10))
+        attach("详情章节选择及下载队列")
+    }
+
+    @MainActor
     func testPagedWindowChangesChapterAndStopsAtTheBookEnds() throws {
         openChapterWindowFixture()
         selectReaderMode("默认（从左到右）")

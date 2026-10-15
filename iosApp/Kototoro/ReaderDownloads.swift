@@ -235,13 +235,8 @@ enum NovelDownloads {
             let target = dir.appendingPathComponent(name)
             if !isValidImage(target) {
                 guard let url = URL(string: address) else { throw URLError(.badURL) }
-                var request = URLRequest(url: url, timeoutInterval: 60)
-                text.headers(imageUrl: address).forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
-                let (data, response) = try await URLSession.shared.data(for: request)
+                let data = try await NovelImageData.load(url, headers: text.headers(imageUrl: address))
                 try Task.checkCancellation()
-                if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-                    throw URLError(.badServerResponse)
-                }
                 guard data.count <= maximumImageBytes,
                       CGImageSourceCreateWithData(data as CFData, nil).map({ CGImageSourceGetCount($0) > 0 }) == true
                 else { throw URLError(.cannotDecodeContentData) }
@@ -257,6 +252,27 @@ enum NovelDownloads {
     private static func isValidImage(_ file: URL) -> Bool {
         guard let source = CGImageSourceCreateWithURL(file as CFURL, nil) else { return false }
         return CGImageSourceGetCount(source) > 0
+    }
+}
+
+/// EPUB illustrations already live in the app's cache; remote resources retain their source headers.
+enum NovelImageData {
+    static func load(_ url: URL, headers: [String: String]) async throws -> Data {
+        let limit = 32 * 1024 * 1024
+        if url.isFileURL {
+            return try await Task.detached(priority: .utility) {
+                guard (try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0) <= limit else {
+                    throw URLError(.dataLengthExceedsMaximum)
+                }
+                return try Data(contentsOf: url)
+            }.value
+        }
+        var request = URLRequest(url: url, timeoutInterval: 60)
+        headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
+              data.count <= limit else { throw URLError(.badServerResponse) }
+        return data
     }
 }
 

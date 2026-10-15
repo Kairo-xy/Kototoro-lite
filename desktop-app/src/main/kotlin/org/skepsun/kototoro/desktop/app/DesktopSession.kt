@@ -50,7 +50,7 @@ class DesktopSession private constructor(
     internal val sourceDiagnostics = DesktopSourceDiagnostics(storage.paths.root)
     private val mihonRuntime = MihonSourceRuntime(registry, storage.images, platform.preferenceContext())
     private val aniyomiRuntime = AniyomiSourceRuntime(registry, storage.images, platform.preferenceContext())
-    private val parserRuntime = ParserSourceRuntime(parsers, parserPlatform, storage.images)
+    private val parserRuntime = ParserSourceRuntime(parsers, parserPlatform, storage.images, ebookAssets = storage.images.directory)
     /** Cloudstream plugins run in the same compatibility runtime and HTTP client (cookies, Cloudflare solver). */
     internal val cloudstream = CloudstreamPluginRegistry(storage.paths.root.resolve("cache/cloudstream"),
         platform.preferenceContext(), platform.sharedHttpClient())

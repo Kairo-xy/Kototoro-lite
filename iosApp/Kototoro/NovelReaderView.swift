@@ -708,12 +708,8 @@ struct HeaderImage: View {
             }
         }
         .task(id: url) {
-            var request = URLRequest(url: url)
-            headers.forEach { request.setValue($0.value, forHTTPHeaderField: $0.key) }
             do {
-                let (data, response) = try await URLSession.shared.data(for: request)
-                guard (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true,
-                      data.count <= 32 * 1024 * 1024 else { throw URLError(.badServerResponse) }
+                let data = try await NovelImageData.load(url, headers: headers)
                 // Downsample off the main actor; illustrations can be very large.
                 image = await Task.detached(priority: .userInitiated) { () -> UIImage? in
                     guard let source = CGImageSourceCreateWithData(data as CFData, nil),

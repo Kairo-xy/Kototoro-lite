@@ -57,7 +57,8 @@ class ParserSourceRuntimeTest {
         registry.load(Fixtures.kototoro, "kototoro-parsers")
         registry.load(Fixtures.kotatsu, "kotatsu-parsers-redo")
         registry.load(Fixtures.tsuki, "uma")
-        runtime = ParserSourceRuntime(registry, platform, FileSourceImageStore(root.resolve("images")))
+        val store = FileSourceImageStore(root.resolve("images"))
+        runtime = ParserSourceRuntime(registry, platform, store, ebookAssets = store.directory)
         server = MockWebServer().apply {
             dispatcher = object : Dispatcher() {
                 override fun dispatch(request: RecordedRequest): MockResponse {
@@ -80,6 +81,52 @@ class ParserSourceRuntimeTest {
         platform.store.open(ParserLoaderContext.namespace(source)).edit(
             SourcePreferenceEdit(changes = mapOf("domain" to SourcePreferenceValue.Text("${server.hostName}:${server.port}"))),
         )
+    }
+
+    @Test
+    fun `EPUB only chapters download through parser headers and expose text and local illustrations`() = runBlocking {
+        val bytes = java.io.ByteArrayOutputStream().also { output ->
+            java.util.zip.ZipOutputStream(output).use { zip ->
+                fun entry(name: String, text: String) {
+                    zip.putNextEntry(java.util.zip.ZipEntry(name))
+                    zip.write(text.toByteArray())
+                    zip.closeEntry()
+                }
+                entry("META-INF/container.xml", "<container><rootfiles><rootfile full-path=\"OPS/book.opf\"/></rootfiles></container>")
+                entry("OPS/book.opf", """<package><metadata><title>EPUB fixture</title></metadata><manifest>
+                    <item id="a" href="first.xhtml" media-type="application/xhtml+xml"/>
+                    <item id="b" href="second.xhtml" media-type="application/xhtml+xml"/>
+                    </manifest><spine><itemref idref="a"/><itemref idref="b"/></spine></package>""")
+                entry("OPS/first.xhtml", "<html><body><p>第一章正文</p><img src=\"pic.png\"/></body></html>")
+                entry("OPS/second.xhtml", "<html><body><p>第二章正文</p></body></html>")
+                zip.putNextEntry(java.util.zip.ZipEntry("OPS/pic.png"))
+                zip.write(Fixtures.png)
+                zip.closeEntry()
+            }
+        }.toByteArray()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                requests.add(request)
+                return MockResponse().setBody(Buffer().write(bytes)).setHeader("Content-Type", "application/epub+zip")
+            }
+        }
+        useServerAsDomain("FIXTURE_KOTOTORO_ONLY")
+        val item = runtime.getList("FIXTURE_KOTOTORO_ONLY", 0, null, null).first()
+        val chapter = runtime.getDetails(item, SourceDetailsFetchMode.ALLOW_CACHE).chapters!!.first()
+            .copy(ebookFormats = listOf("EPUB"))
+        val text = runtime.getChapterContent(chapter, null)
+        assertNotNull(text, "EPUB pages must not become a nil chapter body / NSURLErrorDomain -1014")
+        requireNotNull(text)
+        assertTrue(text.html.contains("第一章正文"))
+        assertTrue(text.html.contains("第二章正文"))
+        val image = Path.of(java.net.URI(text.images.single().url))
+        assertTrue(Files.readAllBytes(image).contentEquals(Fixtures.png))
+        assertTrue(image.toRealPath().startsWith(root.resolve("images").toRealPath()))
+        val request = requests.poll(5, TimeUnit.SECONDS)!!
+        assertEquals("/book.epub", request.path)
+        assertEquals("kototoro", request.getHeader("X-Fixture-Arch"))
+        assertEquals("https://${server.hostName}:${server.port}/", request.getHeader("Referer"))
+        assertTrue(request.getHeader("Accept")!!.contains("application/epub+zip"))
     }
 
     @Test
