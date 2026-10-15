@@ -501,6 +501,7 @@ private fun PagedReaderImage(
             onImageSizeResolved = onImageSizeResolved,
             onImageError = onImageError,
             onZoomedChanged = onZoomedChanged,
+            contentAlignmentOverride = pageAlignment,
             modifier = modifier,
         )
     } else if (!forceCoil) {
@@ -539,6 +540,7 @@ private fun PagedReaderImage(
             zoomMode = zoomMode,
             onImageError = onImageError,
             onZoomedChanged = onZoomedChanged,
+            contentAlignmentOverride = pageAlignment,
             modifier = modifier,
         )
     }
@@ -559,6 +561,7 @@ internal fun TelephotoCoilReaderImage(
     onImageSizeResolved: (width: Int, height: Int) -> Unit,
     onImageError: (Throwable) -> Unit,
     onZoomedChanged: (Boolean) -> Unit = {},
+    contentAlignmentOverride: Alignment? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -580,7 +583,8 @@ internal fun TelephotoCoilReaderImage(
         ZoomMode.FIT_CENTER, ZoomMode.KEEP_START -> ContentScale.Fit
         null -> ContentScale.FillWidth
     }
-    val alignment = if (zoomMode == null || zoomMode == ZoomMode.KEEP_START) Alignment.TopCenter else Alignment.Center
+    val alignment = contentAlignmentOverride
+        ?: if (zoomMode == null || zoomMode == ZoomMode.KEEP_START) Alignment.TopCenter else Alignment.Center
     SideEffect {
         zoomableState.contentScale = contentScale
         zoomableState.contentAlignment = alignment
@@ -675,6 +679,7 @@ private fun ZoomableReaderImage(
     zoomMode: ZoomMode,
     onImageError: (Throwable) -> Unit,
     onZoomedChanged: (Boolean) -> Unit,
+    contentAlignmentOverride: Alignment? = null,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
@@ -747,6 +752,7 @@ private fun ZoomableReaderImage(
         },
         imageLoader = imageLoader,
         contentDescription = null,
+        alignment = contentAlignmentOverride ?: Alignment.Center,
         contentScale = when (zoomMode) {
             ZoomMode.FIT_CENTER,
             ZoomMode.KEEP_START -> ContentScale.Fit

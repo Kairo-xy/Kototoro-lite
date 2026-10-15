@@ -9,6 +9,57 @@ import org.skepsun.kototoro.reader.ui.pager.ReaderPage
 
 class DoublePageSpreadModelTest {
 
+    @Test
+    fun `actual display item model preserves truncated chapter pairing`() {
+        val pages = listOf(page(19, 1), page(20, 1), page(21, 2, 0), page(22, 2, 1))
+        val items = buildDoublePageDisplayItems(pages)
+        val model = DoublePageSpreadModel.create(items)
+        assertEquals(listOf(listOf(19L), listOf(20L), listOf(21L, 22L)), model.spreads.map { spread ->
+            spread.positions.mapNotNull { items[it].page?.id }
+        })
+    }
+
+    @Test
+    fun `wide cover does not create a blank spacer spread`() {
+        val items = buildDoublePageDisplayItems(listOf(page(0, 1), page(1, 1), page(2, 1)), coverPage = true)
+        val model = DoublePageSpreadModel.create(items, widePageIds = setOf(0L))
+        assertEquals(listOf(listOf(0L), listOf(1L, 2L)), model.spreads.map { spread ->
+            spread.positions.mapNotNull { items[it].page?.id }
+        })
+    }
+
+    @Test
+    fun `cover offset keeps the cover alone without a blank spread`() {
+        val items = buildDoublePageDisplayItems((0..2).map { page(it, 1) }, coverPage = true)
+        val model = DoublePageSpreadModel.create(items)
+
+        assertEquals(listOf(listOf(0L), listOf(1L, 2L)), model.spreads.map { spread ->
+            spread.positions.mapNotNull { items[it].page?.id }
+        })
+    }
+
+    @Test
+    fun `wide page does not allow pairing across chapters`() {
+        val items = buildDoublePageDisplayItems(listOf(page(0, 1), page(1, 1), page(2, 2, 0), page(3, 2, 1)))
+        val model = DoublePageSpreadModel.create(items, widePageIds = setOf(0L))
+
+        assertEquals(listOf(listOf(0L), listOf(1L), listOf(2L, 3L)), model.spreads.map { spread ->
+            spread.positions.mapNotNull { items[it].page?.id }
+        })
+    }
+
+    @Test
+    fun `obsolete chapter padding after a wide spread does not offset the next chapter`() {
+        val items = buildDoublePageDisplayItems(
+            listOf(page(0, 1), page(1, 1), page(2, 1), page(3, 2, 0), page(4, 2, 1)),
+        )
+        val model = DoublePageSpreadModel.create(items, widePageIds = setOf(0L))
+
+        assertEquals(listOf(listOf(0L), listOf(1L, 2L), listOf(3L, 4L)), model.spreads.map { spread ->
+            spread.positions.mapNotNull { items[it].page?.id }
+        })
+    }
+
 	private val source = object : ContentSource {
 		override val name = "test"
 		override val locale = "en"

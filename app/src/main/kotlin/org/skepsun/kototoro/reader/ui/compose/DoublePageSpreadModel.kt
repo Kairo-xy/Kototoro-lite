@@ -6,6 +6,7 @@ import org.skepsun.kototoro.reader.ui.pager.ReaderPageSplit
 internal data class DoublePageDisplayItem(
     val page: ReaderPage?,
     val originalPosition: Int,
+    val isChapterLeadingSpacer: Boolean = false,
 )
 
 internal fun buildDoublePageDisplayItems(
@@ -38,7 +39,7 @@ private fun MutableList<DoublePageDisplayItem>.addDoublePageChapterLeadingSpacer
     } else {
         (firstPage.index + coverOffset) % 2 != 0
     }
-    if (needsSpacer) add(DoublePageDisplayItem(page = null, originalPosition = -1))
+    if (needsSpacer) add(DoublePageDisplayItem(page = null, originalPosition = -1, isChapterLeadingSpacer = true))
 }
 
 internal data class DoublePageSpread(
@@ -83,13 +84,26 @@ internal class DoublePageSpreadModel private constructor(
                 return first.split != ReaderPageSplit.NONE &&
                     second.split != ReaderPageSplit.NONE &&
                     first.split != second.split &&
-                    first.id == second.id
+                    first.id == second.id && first.chapterId == second.chapterId
             }
 
             val spreads = buildList {
                 var i = 0
                 while (i < count) {
-                    if (displayItems[i].page == null || isWideSolo(i)) {
+                    val current = displayItems[i]
+                    val next = displayItems.getOrNull(i + 1)
+                    if (current.page == null) {
+                        // Leading spacers position a cover/truncated tail on one side; chapter padding
+                        // must never become an empty spread or offset the next chapter after a wide page.
+                        if (current.isChapterLeadingSpacer && next?.page != null &&
+                            !isWideSolo(i + 1) && !isSplitHalfPair(i + 1)
+                        ) {
+                            add(DoublePageSpread(lowerPosition = i, upperPosition = i + 1))
+                            i += 2
+                        } else {
+                            i++
+                        }
+                    } else if (isWideSolo(i)) {
                         add(DoublePageSpread(lowerPosition = i, upperPosition = i))
                         i++
                     } else if (isSplitHalfPair(i)) {
@@ -100,7 +114,10 @@ internal class DoublePageSpreadModel private constructor(
                         add(DoublePageSpread(lowerPosition = i, upperPosition = i))
                         i++
                     } else if (i + 1 < count) {
-                        if (displayItems[i + 1].page == null || isWideSolo(i + 1) || isSplitHalf(i + 1)) {
+                        val isTrailingSpacer = next?.page == null && next?.isChapterLeadingSpacer == false
+                        val canPair = isTrailingSpacer || (next?.page?.chapterId == current.page.chapterId &&
+                            !isWideSolo(i + 1) && !isSplitHalf(i + 1))
+                        if (!canPair) {
                             add(DoublePageSpread(lowerPosition = i, upperPosition = i))
                             i++
                         } else {
@@ -130,7 +147,7 @@ internal class DoublePageSpreadModel private constructor(
     fun spreadIndexForPage(position: Int): Int {
         if (spreads.isEmpty()) return 0
         val clampedPosition = position.coerceIn(0, spreads.last().upperPosition)
-        return spreads.indexOfFirst { clampedPosition in it.positions }.coerceAtLeast(0)
+        return spreads.indexOfFirst { clampedPosition <= it.upperPosition }.coerceAtLeast(0)
     }
 }
 

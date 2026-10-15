@@ -68,8 +68,8 @@ import org.skepsun.kototoro.reader.ui.pager.ReaderPage
  * Pushes the two pages of a spread against the center fold so no letterbox gap appears between them.
  * [index] is the visual (left-to-right) slot. Single-page spreads (cover/solo) keep the default centering.
  */
-private fun spreadFoldAlignment(spread: DoublePageSpread, index: Int): Alignment? = when {
-    spread.lowerPosition == spread.upperPosition -> null
+private fun spreadFoldAlignment(spread: DoublePageSpread, index: Int, reverseLayout: Boolean): Alignment? = when {
+    !reverseLayout || spread.lowerPosition == spread.upperPosition -> null
     index == 0 -> Alignment.CenterEnd
     else -> Alignment.CenterStart
 }
@@ -462,7 +462,7 @@ fun ComposeDoublePageReader(
                     Box(modifier = Modifier.weight(1f).fillMaxSize())
                 } else {
                     ComposeReaderPage(
-                        pageAlignment = spreadFoldAlignment(spread, index),
+                        pageAlignment = spreadFoldAlignment(spread, index, reverseLayout),
                         page = page,
                         imageLoader = imageLoader,
                         imagePipeline = imagePipeline,
@@ -727,7 +727,7 @@ fun ComposeDoublePageReader(
                             Box(modifier = Modifier.weight(1f).fillMaxSize())
                         } else {
                             ComposeReaderPage(
-                                pageAlignment = spreadFoldAlignment(spread, index),
+                                pageAlignment = spreadFoldAlignment(spread, index, reverseLayout),
                                 page = page,
                                 imageLoader = imageLoader,
                                 imagePipeline = imagePipeline,

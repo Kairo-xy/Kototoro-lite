@@ -93,9 +93,11 @@ object PagedSpreadResolver {
         while (i < count) {
             val first = specs[i]
 
-            // Condition 1: Cover offset page sits alone if cover offset is enabled
-            val isCoverPage = config.isCoverOffset && i == 0
-            if (isCoverPage || isSoloPage(first, config)) {
+            val isChapterStartInSpecs = i == 0 || specs[i - 1].chapterId != first.chapterId
+            val coverOffset = if (config.isCoverOffset) 1 else 0
+            val isSecondPageOfPairInChapter = isChapterStartInSpecs &&
+                first.chapterPageIndex != 0 && (first.chapterPageIndex + coverOffset) % 2 != 0
+            if (isSecondPageOfPairInChapter || isSoloPage(first, config)) {
                 result.add(listOf(first))
                 i++
                 continue
@@ -133,14 +135,7 @@ object PagedSpreadResolver {
         if (spec.spreadBehavior == SpreadBehavior.SOLO) return true
         if (config.isCoverOffset && spec.chapterPageIndex == 0) return true
         
-        // Dynamically inspect aspect ratio to catch wide/double spreads (> 1.15)
-        val ratio = when (spec.geometryHint) {
-            is PageGeometryHint.Exact -> if (spec.geometryHint.height > 0) spec.geometryHint.width.toFloat() / spec.geometryHint.height.toFloat() else 1f
-            is PageGeometryHint.AspectRatio -> spec.geometryHint.ratio
-            is PageGeometryHint.Estimated -> spec.geometryHint.ratio
-        }
-
-        return ratio > 1.15f
+        return spec.segment == PageSegment.FULL && WidePagePolicy.isWidePage(spec.geometryHint)
     }
 
     private fun layoutGroupInSlot(
@@ -152,6 +147,19 @@ object PagedSpreadResolver {
     ): List<PagedPagePlacement> {
         val zoomMode = config.zoomMode
         val isRtl = config.readingDirection == SceneReadingDirection.RIGHT_TO_LEFT
+
+        if (zoomMode == ZoomMode.KEEP_START) {
+            val spacing = config.pageSpacingPx.toFloat()
+            val containerWidth = (viewportWidth - spacing * (group.size - 1)).coerceAtLeast(0f) / group.size
+            var cursor = if (isRtl) viewportWidth else 0f
+            return group.map { spec ->
+                val size = fitPage(spec.geometryHint, containerWidth, viewportHeight, zoomMode)
+                val left = if (isRtl) cursor - size.width else cursor
+                val bounds = FloatRect.fromLtwh(left, 0f, size.width, size.height)
+                cursor = if (isRtl) left - spacing else bounds.right + spacing
+                PagedPagePlacement(spec.pageId, bounds, bounds.translate(slotBounds.left, slotBounds.top))
+            }
+        }
 
         if (group.size == 1) {
             val spec = group[0]
@@ -177,13 +185,15 @@ object PagedSpreadResolver {
             Quad(firstSpec, fittedFirst, secondSpec, fittedSecond)
         }
 
-        val leftPageLeftInSlot = halfWidth - leftFitted.width
+        val leftPageLeftInSlot = if (isRtl) halfWidth - leftFitted.width
+            else (halfWidth - leftFitted.width).coerceAtLeast(0f) / 2f
         val leftPageTopInSlot = (viewportHeight - leftFitted.height).coerceAtLeast(0f) / 2f
         val leftBoundsInSlot = FloatRect.fromLtwh(leftPageLeftInSlot, leftPageTopInSlot, leftFitted.width, leftFitted.height)
         val leftSceneBounds = leftBoundsInSlot.translate(slotBounds.left, slotBounds.top)
 
         val rightSlotLeft = halfWidth + config.pageSpacingPx.toFloat()
-        val rightPageLeftInSlot = rightSlotLeft
+        val rightPageLeftInSlot = rightSlotLeft +
+            if (isRtl) 0f else (halfWidth - rightFitted.width).coerceAtLeast(0f) / 2f
         val rightPageTopInSlot = (viewportHeight - rightFitted.height).coerceAtLeast(0f) / 2f
         val rightBoundsInSlot = FloatRect.fromLtwh(rightPageLeftInSlot, rightPageTopInSlot, rightFitted.width, rightFitted.height)
         val rightSceneBounds = rightBoundsInSlot.translate(slotBounds.left, slotBounds.top)
@@ -207,14 +217,23 @@ object PagedSpreadResolver {
         zoomMode: ZoomMode = ZoomMode.FIT_CENTER,
     ): PageSize {
         if (containerW <= 0f || containerH <= 0f) return PageSize(0f, 0f)
+        if (zoomMode == ZoomMode.KEEP_START && hint is PageGeometryHint.Exact) {
+            return PageSize(hint.width.toFloat(), hint.height.toFloat())
+        }
         val ratio = when (hint) {
             is PageGeometryHint.Exact -> if (hint.height > 0) hint.width.toFloat() / hint.height.toFloat() else 1f
             is PageGeometryHint.AspectRatio -> hint.ratio.coerceAtLeast(0.01f)
             is PageGeometryHint.Estimated -> hint.ratio.coerceAtLeast(0.01f)
         }
 
-        val scale = min(containerW / ratio, containerH)
-        return PageSize(scale * ratio, scale)
+        return when (zoomMode) {
+            ZoomMode.FIT_CENTER, ZoomMode.KEEP_START -> {
+                val scale = min(containerW / ratio, containerH)
+                PageSize(scale * ratio, scale)
+            }
+            ZoomMode.FIT_WIDTH -> PageSize(containerW, containerW / ratio)
+            ZoomMode.FIT_HEIGHT -> PageSize(containerH * ratio, containerH)
+        }
     }
 
     private data class Quad<A, B, C, D>(val first: A, val second: B, val third: C, val fourth: D)
