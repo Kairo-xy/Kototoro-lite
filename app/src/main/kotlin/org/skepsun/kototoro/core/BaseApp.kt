@@ -93,30 +93,34 @@ open class BaseApp : App(), Configuration.Provider, SingletonImageLoader.Factory
                 entryPoint.localStorageChanges().collect(entryPoint.localContentIndexProvider().get())
             }
         }
-        try {
-            entryPoint.workScheduleManager().init()
-        } catch (e: Throwable) {
-            e.printStackTrace()
-        }
-        try {
-            entryPoint.mihonExtensionManager().initialize()
-        } catch (e: Throwable) {
-            e.printStackTrace()
-        }
-        try {
-            entryPoint.aniyomiExtensionManager().initialize()
-        } catch (e: Throwable) {
-            e.printStackTrace()
-        }
-        try {
-            entryPoint.ireaderExtensionManager().initialize()
-        } catch (e: Throwable) {
-            e.printStackTrace()
-        }
-        try {
-            entryPoint.tsundokuExtensionManager().initialize()
-        } catch (e: Throwable) {
-            e.printStackTrace()
+        // Building this part of the Dagger graph (schedulers, scrobbler storages, extension managers)
+        // on the main thread slowed down startup and the UI, so it is all initialized in the background.
+        processLifecycleScope.launch(Dispatchers.Default) {
+            try {
+                entryPoint.workScheduleManager().init()
+            } catch (e: Throwable) {
+                e.printStackTrace()
+            }
+            try {
+                entryPoint.mihonExtensionManager().initialize()
+            } catch (e: Throwable) {
+                e.printStackTrace()
+            }
+            try {
+                entryPoint.aniyomiExtensionManager().initialize()
+            } catch (e: Throwable) {
+                e.printStackTrace()
+            }
+            try {
+                entryPoint.ireaderExtensionManager().initialize()
+            } catch (e: Throwable) {
+                e.printStackTrace()
+            }
+            try {
+                entryPoint.tsundokuExtensionManager().initialize()
+            } catch (e: Throwable) {
+                e.printStackTrace()
+            }
         }
         processLifecycleScope.launch(Dispatchers.IO) {
             try {
