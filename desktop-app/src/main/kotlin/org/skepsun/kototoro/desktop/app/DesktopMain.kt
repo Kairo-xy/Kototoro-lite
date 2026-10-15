@@ -27,7 +27,7 @@ fun main(args: Array<String>) {
     }
 }
 
-private fun runDesktop(args: Array<String>) {
+internal fun runDesktop(args: Array<String>) {
     val options = args.toList()
     require(options.size % 2 == 0 && options.chunked(2).all { it[0] in setOf("--data-dir", "--import", "--check-runtime") }) {
         "Usage: [--data-dir <directory>] [--import <extension.jar>] [--check-runtime <report>]"

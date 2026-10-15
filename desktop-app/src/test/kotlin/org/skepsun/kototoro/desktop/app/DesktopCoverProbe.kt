@@ -108,11 +108,11 @@ internal object DesktopCoverProbe {
                 val first = async(Dispatchers.IO) { session.sources.fetchCover(slow) }
                 withTimeout(5000) { while (System.getProperty("fixture.cover.slow.entered") == null) delay(20) }
                 first.cancelAndJoin()
-                val next = async(Dispatchers.IO) { session.sources.describe(content.source.name) }
-                check(withTimeoutOrNull(250) { next.await() } == null) { "Source gate released before its callback" }
+                // Covers bypass the per-source call order (as Android's image loaders do): a cancelled cover
+                // does not hold back other source calls, and its lease still closes the late response.
+                check(withTimeout(5000) { session.sources.describe(content.source.name) }.isCoverFetchingSupported)
                 System.setProperty("fixture.cover.slow.release", "yes")
-                check(withTimeout(5000) { next.await() }.isCoverFetchingSupported)
-                check(System.getProperty("fixture.cover.closed./slow.png") == "yes")
+                withTimeout(5000) { while (System.getProperty("fixture.cover.closed./slow.png") != "yes") delay(20) }
                 Files.list(session.storage.paths.images).use { files ->
                     check(files.noneMatch { it.fileName.toString().endsWith(".part") })
                 }
