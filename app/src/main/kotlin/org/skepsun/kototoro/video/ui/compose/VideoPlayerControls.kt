@@ -9,10 +9,11 @@ import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.focusable
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -24,7 +25,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Audiotrack
@@ -70,6 +70,7 @@ import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
@@ -322,15 +323,13 @@ fun VideoPlayerBottomControls(
                 Text(text = "/", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 2.dp))
                 Text(text = formatDuration(state.durationMs), style = MaterialTheme.typography.labelMedium)
             }
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Row(
-                    modifier = Modifier
-                        .weight(1f)
-                        .horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                val showSecondaryActions = maxWidth >= 600.dp * LocalDensity.current.fontScale
+                FlowRow(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    itemVerticalAlignment = Alignment.CenterVertically,
                 ) {
                     PlayerIconButton(
                         icon = { Icon(Icons.Filled.SkipPrevious, contentDescription = null) },
@@ -344,38 +343,46 @@ fun VideoPlayerBottomControls(
                         enabled = state.hasNextChapter,
                         onClick = { onAction(VideoPlayerAction.NextChapter) },
                     )
-                    PlayerChapterButton(
-                        groupLabel = state.chapterGroupLabel,
-                        onClick = { onAction(VideoPlayerAction.OpenChapterSelection(chaptersAnchorBounds)) },
-                        modifier = Modifier.onGloballyPositioned {
-                            chaptersAnchorBounds = it.boundsInWindowIntRect()
-                        },
-                    )
-                    state.qualityLabel?.let { label ->
-                        PlayerTextButton(
-                            text = label,
-                            onClick = { onAction(VideoPlayerAction.OpenQuality(qualityAnchorBounds)) },
+                    if (showSecondaryActions) {
+                        PlayerChapterButton(
+                            groupLabel = state.chapterGroupLabel,
+                            onClick = { onAction(VideoPlayerAction.OpenChapterSelection(chaptersAnchorBounds)) },
                             modifier = Modifier.onGloballyPositioned {
-                                qualityAnchorBounds = it.boundsInWindowIntRect()
+                                chaptersAnchorBounds = it.boundsInWindowIntRect()
+                            },
+                        )
+                    } else {
+                        PlayerIconButton(
+                            icon = { Icon(Icons.Filled.GridView, contentDescription = null) },
+                            contentDescription = "Chapters",
+                            onClick = { onAction(VideoPlayerAction.OpenChapterSelection(chaptersAnchorBounds)) },
+                            modifier = Modifier.onGloballyPositioned {
+                                chaptersAnchorBounds = it.boundsInWindowIntRect()
                             },
                         )
                     }
-                }
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    PlayerIconButton(
-                        icon = {
-                            Icon(
-                                painter = painterResource(R.drawable.ic_comment),
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
+                    if (showSecondaryActions) {
+                        state.qualityLabel?.let { label ->
+                            PlayerTextButton(
+                                text = label,
+                                onClick = { onAction(VideoPlayerAction.OpenQuality(qualityAnchorBounds)) },
+                                modifier = Modifier.onGloballyPositioned {
+                                    qualityAnchorBounds = it.boundsInWindowIntRect()
+                                },
                             )
-                        },
-                        contentDescription = stringResource(R.string.video_add_note),
-                        onClick = { onAction(VideoPlayerAction.AddNote) },
-                    )
+                        }
+                        PlayerIconButton(
+                            icon = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_comment),
+                                    contentDescription = null,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            },
+                            contentDescription = stringResource(R.string.video_add_note),
+                            onClick = { onAction(VideoPlayerAction.AddNote) },
+                        )
+                    }
                     PlayerTextButton(
                         text = state.playbackSpeedLabel,
                         onClick = { onAction(VideoPlayerAction.OpenPlaybackSpeed(speedAnchorBounds)) },
@@ -383,11 +390,13 @@ fun VideoPlayerBottomControls(
                             speedAnchorBounds = it.boundsInWindowIntRect()
                         },
                     )
-                    PlayerTextButton(stringResource(R.string.video_mark_intro)) {
-                        onAction(VideoPlayerAction.ToggleIntroMarker)
-                    }
-                    PlayerTextButton(stringResource(R.string.video_mark_outro)) {
-                        onAction(VideoPlayerAction.ToggleOutroMarker)
+                    if (showSecondaryActions) {
+                        PlayerTextButton(stringResource(R.string.video_mark_intro)) {
+                            onAction(VideoPlayerAction.ToggleIntroMarker)
+                        }
+                        PlayerTextButton(stringResource(R.string.video_mark_outro)) {
+                            onAction(VideoPlayerAction.ToggleOutroMarker)
+                        }
                     }
                     PlayerIconButton(
                         icon = {

@@ -2696,7 +2696,22 @@ class VideoPlayerActivity : BaseComposeFullscreenActivity(), ReaderNavigationCal
         }
         actionDialogState = VideoActionDialogState(
             title = getString(R.string.options),
-            items = listOf(
+            items = listOfNotNull(
+                VideoActionDialogItem(
+                    title = getString(R.string.video_quality),
+                    iconRes = R.drawable.ic_settings,
+                    onClick = { onComposePlayerAction(VideoPlayerAction.OpenQuality(lastMoreAnchorBounds)) },
+                ).takeIf { availableVideos.isNotEmpty() },
+                VideoActionDialogItem(
+                    title = getString(R.string.video_mark_intro),
+                    iconRes = R.drawable.ic_fast_forward,
+                    onClick = { onComposePlayerAction(VideoPlayerAction.ToggleIntroMarker) },
+                ),
+                VideoActionDialogItem(
+                    title = getString(R.string.video_mark_outro),
+                    iconRes = R.drawable.ic_fast_rewind,
+                    onClick = { onComposePlayerAction(VideoPlayerAction.ToggleOutroMarker) },
+                ),
                 VideoActionDialogItem(
                     title = getString(R.string.video_reload),
                     iconRes = R.drawable.ic_retry,
