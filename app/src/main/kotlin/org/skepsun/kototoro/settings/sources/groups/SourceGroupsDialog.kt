@@ -57,10 +57,8 @@ fun SourceGroupsDialog(
 	var showNameDialog by remember { mutableStateOf(false) }
 	var pendingExportId by rememberSaveable { mutableStateOf<String?>(null) }
 	val context = LocalContext.current
-	var wasRunning by remember { mutableStateOf(false) }
-	LaunchedEffect(applyState.running) {
-		if (wasRunning && !applyState.running) onApplied()
-		wasRunning = applyState.running
+	LaunchedEffect(applyState.finished) {
+		if (applyState.finished) onApplied()
 	}
 
 	val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->

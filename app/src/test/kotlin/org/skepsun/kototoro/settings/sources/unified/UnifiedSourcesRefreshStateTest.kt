@@ -23,6 +23,11 @@ class UnifiedSourcesRefreshStateTest : FunSpec({
 		state.disabledSourcesForPackageRefresh() shouldContainExactly listOf(disabled)
 	}
 
+    test("group apply refresh does not restore the stale disabled source snapshot") {
+        val staleState = readyState(listOf(sourceItem(source("newly-enabled"), isEnabled = false)))
+        staleState.disabledSourcesForPackageRefresh(preserveDisabledSources = false).shouldBeEmpty()
+    }
+
 	test("package refresh has no source snapshot before catalog is ready") {
 		UnifiedSourcesUiState.Loading.disabledSourcesForPackageRefresh().shouldBeEmpty()
 	}

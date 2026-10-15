@@ -1,7 +1,6 @@
 package org.skepsun.kototoro.settings.sources.groups
 
 import android.content.Context
-import android.content.pm.PackageInfo
 import android.net.Uri
 import android.util.Log
 import androidx.core.content.pm.PackageInfoCompat
@@ -274,7 +273,7 @@ class SourceGroupRepository @Inject constructor(
 			contentSources.setSourceLock(source, state.locked)
 		}
 		if (!isJson) {
-			dao.setSortKey(state.source, state.sortKey)
+			contentSources.setSourceSortKey(state.source, state.sortKey)
 		}
 	}
 
@@ -347,7 +346,7 @@ class SourceGroupRepository @Inject constructor(
 
 		// Normal (system-installed) APK extensions are recorded too so an import can list them.
 		for (info in ExternalExtensionLoaderSupport.getInstalledPackages(context.packageManager)) {
-			val kind = info.systemEcosystem() ?: continue
+			val kind = classifySourceGroupApk(info) ?: continue
 			val pkg: String = info.packageName ?: continue
 			result += SourceGroupPackage(
 				pkg = pkg,
@@ -359,16 +358,6 @@ class SourceGroupRepository @Inject constructor(
 			)
 		}
 		return result.distinctBy { it.kind to it.pkg }
-	}
-
-	private fun PackageInfo.systemEcosystem(): String? {
-		val features = reqFeatures?.mapNotNull { it.name }.orEmpty()
-		return when {
-			"tachiyomi.animeextension" in features -> "aniyomi"
-			"tachiyomi.extension" in features -> "mihon"
-			"ireader" in features -> "ireader"
-			else -> null
-		}
 	}
 
 	private fun isPackageInstalled(pkg: SourceGroupPackage): Boolean {

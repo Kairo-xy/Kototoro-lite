@@ -514,12 +514,19 @@ class UnifiedSourcesViewModel @Inject constructor(
         refreshPackageCatalog(reloadInstalledExtensions = true)
     }
 
+    fun refreshPackagesAfterGroupApply() {
+        // Group application has already persisted its source states. The debounced UI snapshot
+        // can still describe the previous state and must not be written back after this refresh.
+        refreshPackageCatalog(reloadInstalledExtensions = true, preserveDisabledSources = false)
+    }
+
     private fun refreshPackageCatalog(
         refreshRepositories: Boolean = true,
         showLoading: Boolean = true,
         reloadInstalledExtensions: Boolean,
+        preserveDisabledSources: Boolean = true,
     ) {
-        val disabledSourcesBeforeRefresh = uiState.value.disabledSourcesForPackageRefresh()
+        val disabledSourcesBeforeRefresh = uiState.value.disabledSourcesForPackageRefresh(preserveDisabledSources)
         val refreshBlock: suspend kotlinx.coroutines.CoroutineScope.() -> Unit = {
             try {
                 withTimeout(REFRESH_PACKAGES_TIMEOUT_MS) {
@@ -2451,7 +2458,10 @@ private fun externalExtensionTypes(): List<ExternalExtensionType> {
     )
 }
 
-internal fun UnifiedSourcesUiState.disabledSourcesForPackageRefresh(): List<ContentSource> {
+internal fun UnifiedSourcesUiState.disabledSourcesForPackageRefresh(
+    preserveDisabledSources: Boolean = true,
+): List<ContentSource> {
+    if (!preserveDisabledSources) return emptyList()
     return (this as? UnifiedSourcesUiState.Ready)
         ?.allSources
         .orEmpty()

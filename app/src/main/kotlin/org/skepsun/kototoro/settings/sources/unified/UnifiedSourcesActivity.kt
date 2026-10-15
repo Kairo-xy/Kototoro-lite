@@ -127,7 +127,7 @@ class UnifiedSourcesActivity : BaseComposeActivity() {
         if (showSourceGroups) {
             SourceGroupsDialog(
                 onDismissRequest = { showSourceGroups = false },
-                onApplied = viewModel::refreshPackages,
+                onApplied = viewModel::refreshPackagesAfterGroupApply,
             )
         }
         var tabReselectTrigger by remember { mutableStateOf<Pair<Int, Long>?>(null) }
