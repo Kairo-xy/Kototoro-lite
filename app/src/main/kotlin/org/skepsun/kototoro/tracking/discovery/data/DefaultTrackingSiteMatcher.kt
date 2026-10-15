@@ -18,6 +18,7 @@ import org.skepsun.kototoro.tracking.discovery.domain.TrackingSiteMatchResult
 import org.skepsun.kototoro.tracking.discovery.domain.TrackingSiteMatcher
 import org.skepsun.kototoro.tracking.discovery.domain.normalizeStrictTitleKey
 import org.skepsun.kototoro.tracking.discovery.domain.titleSimilarityScore
+import org.skepsun.kototoro.tracking.domain.confirmManualTrackingLink
 import javax.inject.Inject
 
 private const val AUTO_MATCH_THRESHOLD = 0.82f
@@ -133,19 +134,8 @@ class DefaultTrackingSiteMatcher @Inject constructor(
         val content = db.getMangaDao().find(contentId)?.toContent() ?: error("Missing local content $contentId")
         val title = db.getTrackingSiteDao().findItem(service.id, remoteId)?.title ?: remoteId.toString()
         db.withTransaction {
-            val dao = db.getTrackingSiteDao()
-            dao.deleteLinksByManga(service.id, contentId)
-            dao.upsertLink(
-                TrackingSiteLinkEntity(
-                    service = service.id,
-                    remoteId = remoteId,
-                    mangaId = contentId,
-                    sourceName = content.source.name,
-                    confidence = 1f,
-                    isManual = true,
-                    createdAt = System.currentTimeMillis(),
-                    updatedAt = System.currentTimeMillis(),
-                ),
+            db.getTrackingSiteDao().confirmManualTrackingLink(
+                service.id, remoteId, contentId, content.source.name, System.currentTimeMillis(),
             )
         }
         TrackingSiteMatchResult(

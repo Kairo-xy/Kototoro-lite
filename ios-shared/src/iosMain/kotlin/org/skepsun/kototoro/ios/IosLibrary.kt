@@ -39,6 +39,7 @@ class IosLibrary {
     internal val database: MangaDatabase
     private val sourceRefs = AtomicReference<Map<String, SourceRef>>(emptyMap())
     private val records by lazy { SourceLibrary(database) { sourceRefs.load()[it] } }
+    val tracking by lazy { IosTracking(this) }
 
     fun updateSources(sources: List<IosSource>) {
         sourceRefs.store(sources.associate { it.name to SourceRef(it.name, it.locale, it.contentType) })
@@ -211,10 +212,18 @@ class IosLibrary {
     }
 
     @Throws(Exception::class)
-    suspend fun favourites(): List<IosLibraryEntry> = records.snapshot().entries.map(::IosLibraryEntry)
+    suspend fun favourites(): List<IosLibraryEntry> {
+        val entries = records.snapshot().entries
+        val metadata = tracking.selected(entries.map { it.content.id })
+        return entries.map { IosLibraryEntry(it, metadata[it.content.id]) }
+    }
 
     @Throws(Exception::class)
-    suspend fun history(): List<IosLibraryEntry> = records.snapshot(history = true).entries.map(::IosLibraryEntry)
+    suspend fun history(): List<IosLibraryEntry> {
+        val entries = records.snapshot(history = true).entries
+        val metadata = tracking.selected(entries.map { it.content.id })
+        return entries.map { IosLibraryEntry(it, metadata[it.content.id]) }
+    }
 
     @Throws(Exception::class)
     suspend fun isFavourite(content: IosSourceContent): Boolean = records.isFavourite(content.value.id)

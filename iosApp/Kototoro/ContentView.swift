@@ -61,6 +61,8 @@ struct ContentView: View {
                             .accessibilityIdentifier("settings.downloads")
                         NavigationLink { BackupView() } label: { Label("备份与恢复", systemImage: "externaldrive") }
                             .accessibilityIdentifier("settings.backup")
+                        NavigationLink { TrackingSitesView() } label: { Label("追踪网站", systemImage: "link") }
+                            .accessibilityIdentifier("settings.tracking")
                     }
                     Section("本地存储") {
                         NavigationLink { ReaderStorageView() } label: { Label("存储管理", systemImage: "internaldrive") }

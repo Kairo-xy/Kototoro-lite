@@ -3,8 +3,11 @@ package org.skepsun.kototoro.ios
 import org.skepsun.kototoro.core.library.SourceBookmark
 import org.skepsun.kototoro.core.library.SourceLibraryEntry
 
-class IosLibraryEntry internal constructor(value: SourceLibraryEntry) {
-    val content = IosSourceContent(value.content)
+class IosLibraryEntry internal constructor(
+    value: SourceLibraryEntry,
+    metadata: org.skepsun.kototoro.core.db.entity.TrackingSiteItemEntity? = null,
+) {
+    val content = IosSourceContent(value.content, metadata)
     val categoryIds = value.categoryIds.map(Long::toInt)
     val updatedAt = value.updatedAt
     val progress = value.progressPercent ?: 0f

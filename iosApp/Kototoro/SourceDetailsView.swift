@@ -214,6 +214,10 @@ struct SourceDetailsView: View {
     @State private var resume: IosReadingPosition?
     @State private var editingCategories = false
     @State private var changingSource = false
+    @State private var managingTracking = false
+    @State private var metadataContent: IosSourceContent?
+    @State private var metadataRequest: UUID?
+    private var shownContent: IosSourceContent { metadataContent ?? model.details ?? model.content }
     @State private var showingChaptersSheet = false
     private enum DetailsTab: Int, CaseIterable {
         case chapters = 0
@@ -350,9 +354,10 @@ struct SourceDetailsView: View {
             }
         }
         // Over the panorama the bar stays clear; the title appears once the header has scrolled away.
-        .navigationTitle(panorama && scrollOffset < 170 ? "" : model.content.title)
+        .navigationTitle(panorama && scrollOffset < 170 ? "" : shownContent.title)
         .navigationBarTitleDisplayMode(.inline)
         .task {
+            await refreshMetadata()
             // Continuing from the library or history needs no fresh list: resume from the saved one at once.
             await model.showCached(stored: library.library)
             if model.details != nil {
@@ -374,6 +379,9 @@ struct SourceDetailsView: View {
                     ShareLink(item: url) { Label("分享", systemImage: "square.and.arrow.up") }
                 }
                 Menu("更多", systemImage: "ellipsis") {
+                    Button("作品资料", systemImage: "link") { managingTracking = true }
+                        .disabled(library.library == nil)
+                        .accessibilityIdentifier("details.tracking")
                     Button("换源", systemImage: "arrow.triangle.swap") { changingSource = true }
                         .disabled(library.library == nil || (model.details == nil && model.isLoading))
                         .accessibilityIdentifier("details.changeSource")
@@ -388,9 +396,21 @@ struct SourceDetailsView: View {
         .sheet(isPresented: $changingSource) {
             SourceChangeView(runtime: model.runtime, content: model.details ?? model.content) { target in
                 model.changeContent(target)
+                metadataContent = nil
                 recordError = nil
                 changingSource = false
                 Task { await refreshRecords() }
+            }
+        }
+        .sheet(isPresented: $managingTracking) {
+            NavigationStack {
+                TrackingSitesView(content: model.details ?? model.content) {
+                    Task {
+                        await refreshMetadata()
+                        managingTracking = false
+                        toastMessage = shownContent.metadataSiteTitle.map { "已使用 \($0) 资料" } ?? "已恢复内容源资料"
+                    }
+                }
             }
         }
         .sheet(isPresented: $showingChaptersSheet) {
@@ -402,7 +422,7 @@ struct SourceDetailsView: View {
             FavouriteCategoriesView(content: model.details ?? model.content)
         }
         .sheet(isPresented: $previewingCover) {
-            CoverPreviewSheet(runtime: model.runtime, content: model.details ?? model.content)
+            CoverPreviewSheet(runtime: model.runtime, content: shownContent)
         }
         .navigationDestination(item: $destinationBrowse) { src in
             SourceBrowseView(runtime: model.runtime, source: src, initialQuery: browseInitialQuery)
@@ -439,6 +459,7 @@ struct SourceDetailsView: View {
     }
 
     private func refreshRecords() async {
+        await refreshMetadata()
         guard let content = model.details, let database = library.library else { return }
         do {
             try await database.saveDetails(content: content)
@@ -450,13 +471,25 @@ struct SourceDetailsView: View {
         } catch { recordError = error.localizedDescription }
     }
 
+    private func refreshMetadata() async {
+        guard let tracking = library.library?.tracking else { return }
+        let request = UUID()
+        metadataRequest = request
+        let original = model.details ?? model.content
+        do {
+            let result = try await tracking.decorate(content: original)
+            guard original.id == model.content.id, metadataRequest == request else { return }
+            metadataContent = result
+        } catch { recordError = error.localizedDescription }
+    }
+
     private func refreshBookmarks() async {
         guard let content = model.details ?? model.content as IosSourceContent?, let database = library.library else { return }
         bookmarks = (try? await database.bookmarks(content: content)) ?? []
     }
 
     private var header: some View {
-        let shown = model.details ?? model.content
+        let shown = shownContent
         return Section {
             VStack(alignment: .leading, spacing: 14) {
                 coverRow(shown)
@@ -522,7 +555,20 @@ struct SourceDetailsView: View {
                     .buttonStyle(.plain)
                 }
 
-                // Quick Action Buttons Row (Copy, Favorite, Rating) snug below the source button
+                Button { managingTracking = true } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "text.book.closed").font(.caption2)
+                        Text("资料 · \(shown.metadataSiteTitle ?? "内容源")").font(.caption.weight(.medium))
+                        Image(systemName: "chevron.right").font(.system(size: 8, weight: .bold))
+                    }
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Color.accentColor.opacity(0.1), in: .capsule)
+                }
+                .buttonStyle(.plain)
+                .disabled(library.library == nil)
+                .accessibilityIdentifier("details.metadata")
+
+                // Quick actions below the source and metadata labels.
                 HStack(spacing: 8) {
                     Button {
                         UIPasteboard.general.string = shown.title
@@ -769,10 +815,10 @@ struct SourceDetailsView: View {
         ZStack(alignment: .top) {
             Color(uiColor: .systemGroupedBackground)
             if panorama {
-                DetailsPanorama(runtime: model.runtime, content: model.details ?? model.content,
+                DetailsPanorama(runtime: model.runtime, content: shownContent,
                                 scrollOffset: scrollOffset, coverBottom: coverBottom)
             } else {
-                CoverImage(runtime: model.runtime, content: model.details ?? model.content, plain: true)
+                CoverImage(runtime: model.runtime, content: shownContent, plain: true)
                     .frame(height: 420).frame(maxWidth: .infinity)
                     .blur(radius: 50).opacity(0.5)
                     .mask(LinearGradient(colors: [.black, .black.opacity(0.6), .clear], startPoint: .top, endPoint: .bottom))

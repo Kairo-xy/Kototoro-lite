@@ -321,6 +321,33 @@ xcodebuild -project "iosApp/Kototoro.xcodeproj" -scheme Kototoro \
     -only-testing:KototoroUITests/SourceImageFileTests test
 ```
 
+## 作品资料与追踪网站
+
+详情页标题下方的“资料 · 内容源 / 网站名”是常驻入口。点击后按当前作品名自动检索，
+可切换 Bangumi、AniList、Kitsu；结果右侧的“使用”直接应用资料，点击结果本身可先预览。
+应用后返回详情，标题、高清封面、简介、作者、标签和评分按网站资料展示，缺失字段保留源信息。
+“恢复源信息”一键恢复显示；已关联资料保留在菜单中，可再次切换或解除关联。
+设置 → 追踪网站提供独立的公开作品检索，默认网站会保留。
+
+绑定沿用 Android 的 `tracking_site_items` / `tracking_site_links` 与 `preferences.metadata_source_*`，
+没有新增 schema。作品身份、源请求的 opaque 数据、章节、收藏和阅读进度仍归内容源；
+资料仅在展示时覆盖，作品库与历史也读取同一选择，重启后恢复。
+网站封面通过原生 HTTP 加载，封面缓存按来源、作品、封面 URL 及请求方式隔离。
+
+共享部分：`:core-net` 承载公开网站协议与解析，Android 的 Bangumi 搜索/详情也消费同一协议，
+保留原客户端与镜像设置；`:core-domain` 提供 Android/iOS 共用的手动关联规则；
+`:core-library` 提供事务性绑定、选择与展示投影。SwiftUI 负责轻量选择和交互。
+本阶段不提供其他四个网站的在线检索、追踪账号授权或远程阅读进度同步。
+
+回归：`:core-net:jvmTest` 验证请求、分页、类型、解析与失败/取消；
+`:ios-shared:iosSimulatorArm64Test` 中的 `IosTrackingTest` 验证资料覆盖、数据库重开、
+绑定替换、恢复、解绑、身份冲突及章节/进度/阅读偏好保留。
+准备前述本地文件夹具后，运行
+`-only-testing:KototoroUITests/LocalImportTests/testMetadataIsVisibleAndSearchStartsWithTheWorkTitle`。
+可选的真实 Bangumi 验收使用 `TEST_RUNNER_KOTOTORO_TRACKING_ONLINE=1` 配合
+`-only-testing:KototoroUITests/LocalImportTests/testOnlineMetadataCanBeUsedInOneTapAndRestoredAfterRestart`，
+覆盖直接使用、重启恢复与一键恢复源资料，依赖网站和网络可用。
+
 ## 接续范围
 
 1. 在真实超长条漫源与真机内存压力下补充端到端阅读器性能验收。

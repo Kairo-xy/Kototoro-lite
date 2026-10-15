@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+        AC0000000000000000000001 /* TrackingSitesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC0000000000000000000002 /* TrackingSitesView.swift */; };
 		AB0000000000000000000001 /* SourceChangeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AB0000000000000000000002 /* SourceChangeView.swift */; };
 		FE0000000000000000000001 /* ReaderStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0000000000000000000001 /* ReaderStorage.swift */; };
 		FE0000000000000000000002 /* ReaderStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = FF0000000000000000000001 /* ReaderStorage.swift */; };
@@ -88,6 +89,7 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+        AC0000000000000000000002 /* TrackingSitesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TrackingSitesView.swift; sourceTree = "<group>"; };
 		AB0000000000000000000002 /* SourceChangeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SourceChangeView.swift; sourceTree = "<group>"; };
 		FF0000000000000000000001 /* ReaderStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderStorage.swift; sourceTree = "<group>"; };
 		FF0000000000000000000002 /* ReaderStorageView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReaderStorageView.swift; sourceTree = "<group>"; };
@@ -204,6 +206,7 @@
 				FB0000000000000000000005 /* ContinueReading.swift */,
 				FB0000000000000000000008 /* SourceWebBrowser.swift */,
 				FB0000000000000000000007 /* SourceSettingsView.swift */,
+                AC0000000000000000000002 /* TrackingSitesView.swift */,
 				FB0000000000000000000004 /* ReaderPageTurn.swift */,
 				F30000000000000000000002 /* ReaderDownloadsView.swift */,
 				F10000000000000000000007 /* RepositoryLink.swift */,
@@ -408,6 +411,7 @@
 				FA0000000000000000000006 /* ContinueReading.swift in Sources */,
 				FA0000000000000000000008 /* SourceWebBrowser.swift in Sources */,
 				FA0000000000000000000007 /* SourceSettingsView.swift in Sources */,
+                AC0000000000000000000001 /* TrackingSitesView.swift in Sources */,
 				FA0000000000000000000005 /* ReaderPageTurn.swift in Sources */,
 				F20000000000000000000002 /* ReaderDownloadsView.swift in Sources */,
 				F80000000000000000000001 /* BackupView.swift in Sources */,

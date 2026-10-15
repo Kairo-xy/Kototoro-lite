@@ -410,13 +410,19 @@ struct CoverImage: View {
             }
             .clipped()
             .accessibilityValue(image == nil ? (failed ? "失败" : "加载中") : "已加载")
-            .task(id: content.id) {
+            .task(id: CoverCache.identity(content)) {
+                image = CoverCache.shared.image(for: content)
+                failed = false
                 guard image == nil else { return }
                 let fetches = runtime.fetchesCovers(content: content)
                 guard fetches ? content.hasCover : content.coverUrl.flatMap(URL.init(string:)) != nil else {
                     failed = true; return
                 }
-                do { store(try await Self.load(runtime: runtime, content: content)) } catch {
+                do {
+                    let decoded = try await Self.load(runtime: runtime, content: content)
+                    try Task.checkCancellation()
+                    store(decoded)
+                } catch {
                     if !Task.isCancelled { failed = true }
                 }
             }
@@ -438,7 +444,7 @@ struct CoverImage: View {
 
     @MainActor
     private static func load(runtime: IosSources, content: IosSourceContent) async throws -> UIImage {
-        let key = "\(content.sourceName)|\(content.id)"
+        let key = CoverCache.identity(content)
         let task: Task<UIImage, Error>
         if let entry = loading[key] {
             task = entry.task
@@ -512,7 +518,10 @@ final class CoverCache: @unchecked Sendable {
         return cache
     }()
 
-    private func key(_ content: IosSourceContent) -> NSString { "\(content.sourceName)|\(content.id)" as NSString }
+    static func identity(_ content: IosSourceContent) -> String {
+        "\(content.sourceName)|\(content.id)|\(content.usesTrackingCover)|\(content.coverUrl ?? "")"
+    }
+    private func key(_ content: IosSourceContent) -> NSString { Self.identity(content) as NSString }
     func image(for content: IosSourceContent) -> UIImage? { cache.object(forKey: key(content)) }
     func clear() { cache.removeAllObjects() }
     func store(_ image: UIImage, for content: IosSourceContent) {

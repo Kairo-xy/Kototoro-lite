@@ -72,6 +72,11 @@ class BangumiRepository @Inject constructor(
 
     private val clientId = context.getString(R.string.bangumi_clientId)
     private val clientSecret = context.getString(R.string.bangumi_clientSecret)
+    private val discoveryApi by lazy {
+        org.skepsun.kototoro.tracking.discovery.BangumiDiscoveryApi(
+            org.skepsun.kototoro.core.network.createKtorOkHttpClient(okHttp),
+        )
+    }
     private val browserFiltersCache = ConcurrentHashMap<String, BangumiBrowserFilters>()
 
     private val publicEndpoints: BangumiEndpointUrls
@@ -183,18 +188,7 @@ class BangumiRepository @Inject constructor(
     }
 
     override suspend fun findContent(query: String, offset: Int, isAnime: Boolean): List<ScrobblerContent> {
-        val requestBody = JSONObject().apply {
-            put("keyword", query)
-            put("filter", JSONObject().apply {
-                put("type", JSONArray().apply { put(if (isAnime) 2 else 1) }) // 2 is Anime, 1 is Book
-            })
-        }.toString().toRequestBody("application/json".toMediaType())
-
-        val request = Request.Builder()
-            .url(bangumiApiUrl("v0/search/subjects?limit=10&offset=$offset"))
-            .post(requestBody)
-
-        val response = okHttp.newCall(request.build()).await().ensureSuccess().parseJson()
+        val response = JSONObject(discoveryApi.search(query, offset, isAnime, publicEndpoints.apiBaseUrl))
         val data = response.getJSONArray("data")
         return data.mapJSON { json ->
             ScrobblerContent(
@@ -634,10 +628,7 @@ private suspend fun loadBrowserFilters(category: String): BangumiBrowserFilters 
     }
 
     private suspend fun getSubjectDetailsFromApi(id: Long): BangumiApiSubjectPayload {
-        val request = Request.Builder()
-            .url(bangumiApiUrl("v0/subjects/$id"))
-            .get()
-        val json = okHttp.newCall(request.build()).await().ensureSuccess().parseJson()
+        val json = JSONObject(discoveryApi.details(id, publicEndpoints.apiBaseUrl))
         val platformType = json.optString("platform").takeIf { it.isNotBlank() }
         val subjectType = json.optInt("type").takeIf { it > 0 }
         val infoboxProperties = json.optJSONArray("infobox").toBangumiInfoboxProperties().let { list ->

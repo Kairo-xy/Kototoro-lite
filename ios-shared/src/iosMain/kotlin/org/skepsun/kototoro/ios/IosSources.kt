@@ -12,6 +12,7 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.skepsun.kototoro.core.source.RoutedSourceRuntime
+import org.skepsun.kototoro.core.library.withTrackingMetadata
 import org.skepsun.kototoro.core.source.SourceChapter
 import org.skepsun.kototoro.core.source.SourceChapterContent
 import org.skepsun.kototoro.core.source.SourceChapterNavigation
@@ -324,24 +325,30 @@ class IosSourceTag internal constructor(internal val value: SourceTag) {
 }
 
 /** Keep opaque extension fields inside Kotlin, including when Swift pushes a detail/reader screen. */
-class IosSourceContent internal constructor(internal val value: SourceContent) {
+class IosSourceContent internal constructor(
+    internal val value: SourceContent,
+    internal val metadata: org.skepsun.kototoro.core.db.entity.TrackingSiteItemEntity? = null,
+) {
+    private val display = value.withTrackingMetadata(metadata)
+    val usesTrackingCover: Boolean get() = !metadata?.coverUrl.isNullOrBlank()
+    val metadataSiteTitle: String? get() = metadata?.service?.let(::trackingSiteTitle)
     val id: String get() = value.id.toString()
     val sourceName: String get() = value.source.name
     val contentType: String get() = value.source.contentType
     val mediaKind: String get() = mediaKindOf(value.source.contentType)
-    val title: String get() = value.title
+    val title: String get() = display.title
     val url: String get() = value.url
     val publicUrl: String get() = value.publicUrl
-    val authors: List<String> get() = value.authors.toList()
-    val altTitles: List<String> get() = value.altTitles.filter { it.isNotBlank() && it != value.title }
+    val authors: List<String> get() = display.authors.toList()
+    val altTitles: List<String> get() = display.altTitles.filter { it.isNotBlank() && it != display.title }
     /** 0…1 as on Android; negative when the source has no rating. */
-    val rating: Float get() = value.rating
+    val rating: Float get() = display.rating
     /** ONGOING / FINISHED / ABANDONED / PAUSED / UPCOMING / RESTRICTED, when known. */
     val state: String? get() = value.state?.takeIf(String::isNotBlank)
     val contentRating: String? get() = value.contentRating?.takeIf(String::isNotBlank)
-    val tags: List<String> get() = value.tags.map { it.title }
-    val summary: String? get() = value.description?.takeIf(String::isNotBlank)
-    val coverUrl: String? get() = (value.largeCoverUrl ?: value.coverUrl)?.takeIf(String::isNotBlank)
+    val tags: List<String> get() = display.tags.map { it.title }
+    val summary: String? get() = display.description?.takeIf(String::isNotBlank)
+    val coverUrl: String? get() = (display.largeCoverUrl ?: display.coverUrl)?.takeIf(String::isNotBlank)
     val hasCover: Boolean get() = coverUrl != null
     val chapters: List<IosSourceChapter> get() = value.chapters.orEmpty().map(::IosSourceChapter)
     /** Without building the chapter list (each [chapters] read maps and bridges every chapter). */
@@ -629,7 +636,8 @@ class IosSources(
         runtime.getChapterContent(chapter.value, null)?.let(::IosChapterText)
 
     /** Extension covers are downloaded by the source's own client; native sources expose plain cover URLs. */
-    fun fetchesCovers(content: IosSourceContent): Boolean = !MacCmsSourceRuntime.owns(content.value.source.name)
+    fun fetchesCovers(content: IosSourceContent): Boolean =
+        !content.usesTrackingCover && !MacCmsSourceRuntime.owns(content.value.source.name)
 
     @Throws(Exception::class)
     suspend fun image(page: IosSourcePage): IosSourceImage {

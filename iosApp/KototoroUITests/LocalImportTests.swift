@@ -450,6 +450,82 @@ final class LocalImportTests: XCTestCase {
     }
 
     @MainActor
+    func testMetadataIsVisibleAndSearchStartsWithTheWorkTitle() throws {
+        importFile(source: "LOCAL", file: "fixture_comic", reuse: true)
+        let title = app.staticTexts["details.title"]
+        XCTAssertTrue(title.waitForExistence(timeout: 30))
+        let original = title.label
+        let metadata = app.buttons["details.metadata"]
+        XCTAssertTrue(metadata.isHittable, "Metadata should be discoverable without opening More")
+        metadata.tap()
+        XCTAssertTrue(app.navigationBars["作品资料"].waitForExistence(timeout: 10))
+        XCTAssertEqual(app.textFields["tracking.query"].value as? String, original)
+        for site in [2, 4, 5] { XCTAssertTrue(app.buttons["tracking.site.\(site)"].exists) }
+        attach("轻量作品资料选择")
+        app.navigationBars["作品资料"].buttons["完成"].tap()
+        XCTAssertTrue(metadata.waitForExistence(timeout: 10))
+        XCTAssertEqual(title.label, original)
+        assertMetadataChapterIsAvailable()
+    }
+
+    @MainActor
+    func testOnlineMetadataCanBeUsedInOneTapAndRestoredAfterRestart() throws {
+        guard ProcessInfo.processInfo.environment["KOTOTORO_TRACKING_ONLINE"] == "1" else {
+            throw XCTSkip("Set TEST_RUNNER_KOTOTORO_TRACKING_ONLINE=1 for public Bangumi acceptance")
+        }
+        importFile(source: "LOCAL", file: "fixture_comic", reuse: true)
+        XCTAssertTrue(app.buttons["details.metadata"].waitForExistence(timeout: 30))
+        app.buttons["details.metadata"].tap()
+        let restore = app.buttons["tracking.useSource"]
+        if restore.waitForExistence(timeout: 2) {
+            restore.tap()
+            XCTAssertTrue(app.buttons["details.metadata"].waitForExistence(timeout: 10))
+            app.buttons["details.metadata"].tap()
+        }
+        app.buttons["tracking.site.5"].tap()
+        let query = app.textFields["tracking.query"]
+        XCTAssertTrue(query.waitForExistence(timeout: 10))
+        query.tap()
+        let current = query.value as? String ?? ""
+        query.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: current.count + 2))
+        query.typeText("葬送的芙莉莲")
+        app.buttons["tracking.search"].tap()
+        let use = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "tracking.use.")).firstMatch
+        XCTAssertTrue(use.waitForExistence(timeout: 60), app.debugDescription)
+        use.tap()
+        let metadata = app.buttons["details.metadata"]
+        XCTAssertTrue(metadata.waitForExistence(timeout: 60), app.debugDescription)
+        XCTAssertTrue(metadata.label.contains("Bangumi"))
+        XCTAssertTrue(app.staticTexts["details.title"].label.contains("芙莉莲"))
+        assertMetadataChapterIsAvailable()
+        attach("一键使用 Bangumi 资料")
+
+        app.terminate(); app.launch()
+        importFile(source: "LOCAL", file: "fixture_comic", reuse: true)
+        XCTAssertTrue(metadata.waitForExistence(timeout: 30))
+        XCTAssertTrue(metadata.label.contains("Bangumi"))
+        metadata.tap()
+        XCTAssertTrue(restore.waitForExistence(timeout: 10))
+        restore.tap()
+        XCTAssertTrue(metadata.waitForExistence(timeout: 10))
+        XCTAssertTrue(metadata.label.contains("内容源"))
+        XCTAssertTrue(app.staticTexts["details.title"].label.contains("fixture_comic"))
+        assertMetadataChapterIsAvailable()
+        attach("恢复源资料并保留章节")
+    }
+
+    @MainActor
+    private func assertMetadataChapterIsAvailable() {
+        let chapters = app.buttons["章节"].firstMatch
+        XCTAssertTrue(chapters.waitForExistence(timeout: 10))
+        chapters.tap()
+        let chapter = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "chapter.")).firstMatch
+        XCTAssertTrue(chapter.waitForExistence(timeout: 10), app.debugDescription)
+        app.navigationBars.buttons["完成"].tap()
+        XCTAssertTrue(chapter.waitForNonExistence(timeout: 10))
+    }
+
+    @MainActor
     func testPrepareDownloadedReaderFixture() throws {
         importFile(source: "LOCAL", file: "fixture_reader_download", reuse: true)
         openFirstChapter(title: "fixture_reader_download")
