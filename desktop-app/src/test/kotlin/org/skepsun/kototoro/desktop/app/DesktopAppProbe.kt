@@ -54,6 +54,10 @@ object DesktopAppProbe {
                 DesktopNovelDirectoryProbe.run(args)
                 return
             }
+            if (args[0].startsWith("manga-directory")) {
+                DesktopMangaDirectoryProbe.run(args)
+                return
+            }
             if (args[0].startsWith("tablet")) {
                 DesktopTabletProbe.run(args)
                 return

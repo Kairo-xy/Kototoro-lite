@@ -22,6 +22,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -75,7 +77,8 @@ fun DesktopApp(controller: DesktopController, closing: Boolean = false, fullscre
         CompositionLocalProvider(LocalDesktopWindowWidth provides maxWidth, LocalDesktopBackdrop provides backdrop) {
             Row(Modifier.fillMaxSize()) {
                 if (!reading) DesktopNavigationRail(controller, listState, !closing)
-                Column(Modifier.weight(1f).fillMaxHeight().padding(if (reading) 0.dp else 24.dp),
+                Column(Modifier.weight(1f).fillMaxHeight()
+                    .padding(if (reading || listState.screen == DesktopScreen.HOME) 0.dp else 24.dp),
                     verticalArrangement = Arrangement.spacedBy(if (reading) 0.dp else 14.dp)) {
                     if (!reading && listState.screen !in setOf(DesktopScreen.LIBRARY, DesktopScreen.HISTORY,
                             DesktopScreen.EXPLORE, DesktopScreen.HOME, DesktopScreen.FEED)) Header(listState)
@@ -351,7 +354,8 @@ private fun PreferenceNode(controller: DesktopController, node: SourcePreference
                 SourcePreferenceKind.TEXT -> {
                     var text by remember(node.id, node.value) { mutableStateOf((node.value as? SourcePreferenceValue.Text)?.value.orEmpty()) }
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        OutlinedTextField(text, { text = it }, enabled = enabled, modifier = Modifier.weight(1f))
+                        OutlinedTextField(text, { text = it }, enabled = enabled, modifier = Modifier.weight(1f),
+                            visualTransformation = if (node.isSecret) PasswordVisualTransformation() else VisualTransformation.None)
                         Button({ controller.updatePreference(node, SourcePreferenceValue.Text(text)) }, enabled = enabled) { Text("保存") }
                     }
                 }
@@ -376,6 +380,8 @@ private fun PreferenceNode(controller: DesktopController, node: SourcePreference
                     }
                 }
                 SourcePreferenceKind.GROUP -> node.children.forEach { PreferenceNode(controller, it, enabled) }
+                SourcePreferenceKind.ACTION -> OutlinedButton({ controller.updatePreference(node, SourcePreferenceValue.Action()) },
+                    enabled = enabled, modifier = Modifier.testTag("preference:${node.id}")) { Text("执行") }
                 SourcePreferenceKind.UNSUPPORTED -> Text("此控件尚未支持", fontSize = 12.sp, color = Muted)
                 SourcePreferenceKind.INFO -> Unit
             }

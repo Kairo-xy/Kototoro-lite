@@ -150,7 +150,7 @@ internal class DesktopDownloadStore(private val preferences: SourcePreferenceSto
         fun key(contentId: Long, chapter: SourceChapter) = imageKey(
             "${chapter.source.name}\u0000$contentId\u0000${chapter.id}".toByteArray())
 
-        private fun sameChapter(first: SourceChapter, second: SourceChapter) = first.id == second.id &&
+        internal fun sameChapter(first: SourceChapter, second: SourceChapter) = first.id == second.id &&
             first.source.name == second.source.name && first.url == second.url && first.branch == second.branch
     }
 }

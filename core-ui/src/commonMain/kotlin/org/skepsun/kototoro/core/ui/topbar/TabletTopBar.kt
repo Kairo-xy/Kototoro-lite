@@ -2,6 +2,7 @@ package org.skepsun.kototoro.core.ui.topbar
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.animateScrollBy
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -49,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import org.skepsun.kototoro.core.ui.theme.LocalInterfaceStyleTokens
+import org.skepsun.kototoro.core.ui.gestures.mouseDragScroll
 import kotlin.math.floor
 
 /*
@@ -228,6 +230,7 @@ fun TopBarTabsRail(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(tokens.minimumTouchTarget)
+                .mouseDragScroll(listState, Orientation.Horizontal)
                 .compactRailEdgeFade(fadeStart = listState.canScrollBackward, fadeEnd = listState.canScrollForward)
                 .padding(horizontal = 8.dp)
                 .drawWithContent {
@@ -321,7 +324,8 @@ fun <T> TopBarFilterRail(
         surface(Modifier.fillMaxWidth().height(TopBarFilterRailVisualHeight).align(Alignment.BottomCenter))
         LazyRow(
             state = listState,
-            modifier = Modifier.fillMaxWidth().height(tokens.minimumTouchTarget),
+            modifier = Modifier.fillMaxWidth().height(tokens.minimumTouchTarget)
+                .mouseDragScroll(listState, Orientation.Horizontal),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
             contentPadding = PaddingValues(horizontal = 12.dp),

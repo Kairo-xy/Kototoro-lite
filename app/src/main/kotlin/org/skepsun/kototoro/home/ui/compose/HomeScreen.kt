@@ -1,45 +1,25 @@
 package org.skepsun.kototoro.home.ui.compose
 
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.widthIn
-import org.skepsun.kototoro.core.ui.adaptive.TabletLayoutClass
-import org.skepsun.kototoro.core.ui.adaptive.tabletLayoutClass
 import org.skepsun.kototoro.core.util.FoldableUtils
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
+import org.skepsun.kototoro.core.ui.home.HomeScreenLayout
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.PaddingValues
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.asPaddingValues
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.focusGroup
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBars
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.Stable
-import androidx.compose.runtime.derivedStateOf
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.input.nestedscroll.nestedScroll
-import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.rememberNestedScrollInteropConnection
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import org.skepsun.kototoro.R
 import org.skepsun.kototoro.core.prefs.AppSettings
@@ -66,7 +46,6 @@ import org.skepsun.kototoro.home.ui.compose.sections.HomeQuickAction
 import org.skepsun.kototoro.home.ui.compose.sections.HomeRailStyle
 import org.skepsun.kototoro.home.ui.compose.sections.QuickActionsSection
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.setValue
 
 @Immutable
 private data class HomeScreenPrefs(
@@ -124,7 +103,6 @@ fun HomeScreen(
     val layoutDirection = LocalLayoutDirection.current
     val systemBarsPadding = WindowInsets.systemBars.asPaddingValues()
     val context = LocalContext.current
-    val density = LocalDensity.current
     val settings = remember(context.applicationContext) { AppSettings(context.applicationContext) }
     val isTvPresentation = LocalUiPresentationConfig.current.isTv
     val screenPrefs by settings.observeAsState(
@@ -240,167 +218,75 @@ fun HomeScreen(
     } else {
         0.dp
     }
-    // The hero sits below the top chrome again (full-bleed looked vertically
-    // stretched); only the pager indicator moved inside the card, so the
-    // measured height is just the card height.
-    val estimatedHeroPx = with(density) { (HOME_HERO_CARD_HEIGHT + topInset + 8.dp).roundToPx() }
-    var heroPx by rememberSaveable { mutableIntStateOf(estimatedHeroPx) }
-    val heroHeightDp by remember(heroPx, density) {
-        derivedStateOf { with(density) { heroPx.toDp() } }
-    }
-    val heroContent: @Composable (Modifier, TabletLayoutClass) -> Unit = { heroModifier, heroLayoutClass ->
-        HomeHeroSection(
-            entries = heroEntries,
-            mode = heroMode,
-            fixedPresentation = HomeHeroPresentation(heroBackground, heroContentLayout),
-            panoramaPrefs = homeHeroPanoramaPrefs,
-            onClick = onContentClick,
-            topContentInset = topInset + 8.dp,
-            autoAdvance = autoAdvanceHero,
-            modifier = heroModifier,
-            layoutClass = heroLayoutClass,
-        )
-    }
-    val contentMaxWidth = HomeContentMaxWidth + CompactTopBarHorizontalPadding * 2
-    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
-    // Resolved from the home pane's own width (the navigation rail is already outside it).
-    val layoutClass = tabletLayoutClass(
-        widthDp = maxWidth.value.toInt(),
+    val hasHighlights = heroEntries.isNotEmpty() ||
+        state.recentHistoryItems.isNotEmpty() || state.recentUpdates.isNotEmpty() ||
+        state.recommendations.isNotEmpty() || recentSearches.isNotEmpty()
+    HomeScreenLayout(
+        hasHero = heroEntries.isNotEmpty(),
+        hasHighlights = hasHighlights,
+        initialized = state.isInitialized,
         tabletLayoutEnabled = FoldableUtils.shouldUseTabletLayout(context, settings),
-    )
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .widthIn(max = contentMaxWidth)
-                .fillMaxSize()
-                .then(if (isTvPresentation) Modifier.focusGroup() else Modifier)
-                .nestedScroll(rememberNestedScrollInteropConnection())
-                .padding(
-                    start = systemBarsPadding.calculateLeftPadding(layoutDirection) + CompactTopBarHorizontalPadding,
-                    end = systemBarsPadding.calculateRightPadding(layoutDirection) + CompactTopBarHorizontalPadding,
-                ),
-            contentPadding = PaddingValues(
-                top = scrollTopInset,
-                bottom = contentPadding.calculateBottomPadding() + 12.dp,
-            ),
-            verticalArrangement = Arrangement.spacedBy(HOME_SECTION_GAP),
-        ) {
-            val hasHighlights = heroEntries.isNotEmpty() ||
-                state.recentHistoryItems.isNotEmpty() ||
-                state.recentUpdates.isNotEmpty() ||
-                state.recommendations.isNotEmpty() ||
-                recentSearches.isNotEmpty()
-            if (hasHighlights) {
-                if (heroEntries.isNotEmpty()) {
-                    if (isTvPresentation) {
-                        // Keep the focused pager inside the vertical lazy layout so D-pad
-                        // search can compose and scroll to content below the viewport.
-                        item(key = "home_hero") {
-                            heroContent(Modifier, layoutClass)
-                        }
-                    } else {
-                        item(key = "home_hero_spacer") {
-                            Spacer(modifier = Modifier.height(heroHeightDp))
-                        }
-                    }
-                } else {
-                    item(key = "home_greeting") {
-                        org.skepsun.kototoro.home.ui.compose.sections.HomeGreetingHeaderCard(
-                            unreadUpdatesCount = state.unreadUpdatesCount,
-                            onExploreClick = actions.onViewAllRecommendationsClick,
-                        )
-                    }
-                }
-                item(key = "home_highlights") {
-                  HomeSideBySide(
-                    enabled = layoutClass == TabletLayoutClass.EXPANDED,
-                    side = { QuickActionsSection(actions = quickActions, preferredTileWidth = 96.dp) },
-                  ) {
-                    HomeHighlightsSections(
-                        historyItems = state.recentHistoryItems,
-                        recentHistoryCount = state.recentHistoryCount,
-                        updateItems = state.recentUpdates,
-                        unreadUpdatesCount = state.unreadUpdatesCount,
-                        recommendationItems = state.recommendations,
-                        recommendationsCount = state.recommendationsCount,
-                        recentSearches = recentSearches,
-                        historyStyle = historyRailStyle,
-                        updatesStyle = updatesRailStyle,
-                        recommendationsStyle = recommendationsRailStyle,
-                        onItemClick = onContentClick,
-                        onViewAllRecentClick = actions.onViewAllRecentClick,
-                        onViewAllUpdatesClick = actions.onViewAllUpdatesClick,
-                        onViewAllRecommendationsClick = actions.onViewAllRecommendationsClick,
-                        onConfigureHistoryClick = actions.onConfigureHistoryClick,
-                        onConfigureUpdatesClick = actions.onConfigureUpdatesClick,
-                        onConfigureRecommendationsClick = actions.onConfigureRecommendationsClick,
-                        onRecentSearchClick = actions.onRecentSearchClick,
-                    )
-                  }
-                }
-            }
-            if (!hasHighlights && !state.isInitialized) {
-                item(key = "home_loading_skeleton") {
-                    HomeLoadingSkeleton(posterStyle = posterStyle)
-                }
-            }
-
-            // On expanded windows quick access sits beside the highlights instead.
-            if (!(hasHighlights && layoutClass == TabletLayoutClass.EXPANDED)) {
-                item(key = "home_quick_actions") {
-                    QuickActionsSection(actions = quickActions)
-                }
-            }
-        }
-
-        if (heroEntries.isNotEmpty() && !isTvPresentation) {
-            heroContent(
-                Modifier
-                    .align(Alignment.TopCenter)
-                    .widthIn(max = contentMaxWidth)
-                    // A layout offset, not a draw-phase graphicsLayer: the cover's
-                    // shared-element rect is measured from this subtree's layout
-                    // coordinates, and a layer-only translation never re-places the
-                    // node — the flight would then aim at where the hero sat before the
-                    // list was scrolled (too low) and only snap to the real rect later.
-                    // Modifier.offset re-places the node per scroll frame.
-                    .offset {
-                        val scrollOffset = if (listState.firstVisibleItemIndex == 0) {
-                            listState.firstVisibleItemScrollOffset
-                        } else {
-                            heroPx
-                        }
-                        IntOffset(x = 0, y = -scrollOffset.coerceIn(0, heroPx))
-                    }
-                    .onGloballyPositioned { coordinates ->
-                        val newHeight = coordinates.size.height
-                        if (heroPx != newHeight) heroPx = newHeight
-                    },
-                layoutClass,
+        modifier = modifier,
+        listState = listState,
+        listModifier = Modifier
+            .then(if (isTvPresentation) Modifier.focusGroup() else Modifier)
+            .nestedScroll(rememberNestedScrollInteropConnection()),
+        contentPadding = PaddingValues(
+            top = scrollTopInset,
+            bottom = contentPadding.calculateBottomPadding() + 12.dp,
+        ),
+        horizontalPadding = PaddingValues(
+            start = systemBarsPadding.calculateLeftPadding(layoutDirection) + CompactTopBarHorizontalPadding,
+            end = systemBarsPadding.calculateRightPadding(layoutDirection) + CompactTopBarHorizontalPadding,
+        ),
+        estimatedHeroHeight = HOME_HERO_CARD_HEIGHT + topInset + 8.dp,
+        heroInsideList = isTvPresentation,
+        hero = { heroModifier, layoutClass ->
+            HomeHeroSection(
+                entries = heroEntries,
+                mode = heroMode,
+                fixedPresentation = HomeHeroPresentation(heroBackground, heroContentLayout),
+                panoramaPrefs = homeHeroPanoramaPrefs,
+                onClick = onContentClick,
+                topContentInset = topInset + 8.dp,
+                autoAdvance = autoAdvanceHero,
+                modifier = heroModifier,
+                layoutClass = layoutClass,
             )
-        }
-    }
+        },
+        greeting = {
+            org.skepsun.kototoro.home.ui.compose.sections.HomeGreetingHeaderCard(
+                unreadUpdatesCount = state.unreadUpdatesCount,
+                onExploreClick = actions.onViewAllRecommendationsClick,
+            )
+        },
+        highlights = {
+            HomeHighlightsSections(
+                historyItems = state.recentHistoryItems,
+                recentHistoryCount = state.recentHistoryCount,
+                updateItems = state.recentUpdates,
+                unreadUpdatesCount = state.unreadUpdatesCount,
+                recommendationItems = state.recommendations,
+                recommendationsCount = state.recommendationsCount,
+                recentSearches = recentSearches,
+                historyStyle = historyRailStyle,
+                updatesStyle = updatesRailStyle,
+                recommendationsStyle = recommendationsRailStyle,
+                onItemClick = onContentClick,
+                onViewAllRecentClick = actions.onViewAllRecentClick,
+                onViewAllUpdatesClick = actions.onViewAllUpdatesClick,
+                onViewAllRecommendationsClick = actions.onViewAllRecommendationsClick,
+                onConfigureHistoryClick = actions.onConfigureHistoryClick,
+                onConfigureUpdatesClick = actions.onConfigureUpdatesClick,
+                onConfigureRecommendationsClick = actions.onConfigureRecommendationsClick,
+                onRecentSearchClick = actions.onRecentSearchClick,
+            )
+        },
+        quickActions = { expanded ->
+            QuickActionsSection(actions = quickActions, preferredTileWidth = if (expanded) 96.dp else null)
+        },
+        loading = { HomeLoadingSkeleton(posterStyle = posterStyle) },
+    )
 }
 
-internal val HOME_SECTION_GAP = 4.dp
-
-/**
- * On expanded windows, the highlights take the wider left column and [side] (quick access) a right
- * one, filling what would otherwise be an empty half screen below short sections.
- */
-@Composable
-private fun HomeSideBySide(
-    enabled: Boolean,
-    side: @Composable () -> Unit,
-    main: @Composable () -> Unit,
-) {
-    if (!enabled) {
-        main()
-        return
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
-        Box(modifier = Modifier.weight(0.62f)) { main() }
-        Box(modifier = Modifier.weight(0.38f).padding(top = 8.dp)) { side() }
-    }
-}
+internal val HOME_SECTION_GAP = org.skepsun.kototoro.core.ui.home.HomeScreenSectionGap

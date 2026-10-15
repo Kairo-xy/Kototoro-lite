@@ -4,6 +4,7 @@ import android.content.res.Resources
 import android.text.format.DateUtils
 import org.jsoup.internal.StringUtil.StringJoiner
 import org.skepsun.kototoro.core.model.getLocalizedTitle
+import org.skepsun.kototoro.core.ui.chapters.chapterMatchesQuery
 import org.skepsun.kototoro.list.ui.model.ListModel
 import org.skepsun.kototoro.parsers.model.ContentChapter
 import kotlin.experimental.and
@@ -55,9 +56,7 @@ data class ChapterListItem(
         get() = hasFlag(FLAG_GRID)
 
     operator fun contains(query: String): Boolean = with(chapter) {
-        title?.contains(query, ignoreCase = true) == true
-            || numberString()?.contains(query) == true
-            || volumeString()?.contains(query) == true
+        chapterMatchesQuery(query, title, numberString(), volumeString())
     }
 
     fun getTitle(resources: Resources): String {

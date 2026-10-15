@@ -194,6 +194,7 @@ fun SharedNovelReaderSearchField(
     placeholder: String,
     modifier: Modifier = Modifier,
     clearContentDescription: String? = null,
+    queryTag: String = "novel-search-query",
 ) {
     Surface(
         shape = RoundedCornerShape(14.dp),
@@ -227,7 +228,7 @@ fun SharedNovelReaderSearchField(
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                 modifier = Modifier
                     .weight(1f)
-                    .testTag("novel-search-query")
+                    .testTag(queryTag)
                     .padding(horizontal = 8.dp),
                 decorationBox = { innerTextField ->
                     Box(contentAlignment = Alignment.CenterStart) {

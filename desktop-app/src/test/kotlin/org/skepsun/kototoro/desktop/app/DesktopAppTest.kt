@@ -68,6 +68,12 @@ class DesktopAppTest {
     }
 
     @Test
+    fun `shared manga directory locates branches switches grid and preserves current page in wide and narrow windows`() {
+        probe("manga-directory", directory.resolve("中文 manga directory wide"))
+        probe("manga-directory-narrow", directory.resolve("中文 manga directory narrow"))
+    }
+
+    @Test
     fun `tablet layout and immersive reader panels preserve progress in wide and narrow windows`() {
         probe("tablet", directory.resolve("中文 tablet wide"))
         probe("tablet-narrow", directory.resolve("中文 tablet narrow"))

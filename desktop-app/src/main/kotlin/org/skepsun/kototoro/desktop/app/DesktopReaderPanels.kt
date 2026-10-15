@@ -61,33 +61,6 @@ internal fun DesktopReaderSidePanel(controller: DesktopController, state: Deskto
                         }
                     }
                 }
-            } else if (panel == DesktopReaderPanel.CHAPTERS) {
-                var query by remember { mutableStateOf("") }
-                var reversed by remember { mutableStateOf(false) }
-                OutlinedTextField(query, { query = it }, singleLine = true, placeholder = { Text("搜索章节") },
-                    modifier = Modifier.fillMaxWidth().testTag("reader-chapter-query"))
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("${state.content?.chapters?.size ?: 0} 章", modifier = Modifier.weight(1f))
-                    TextButton({ reversed = !reversed }) { Text(if (reversed) "倒序" else "正序") }
-                }
-                val chapters = remember(state.content?.chapters, query, reversed) {
-                    state.content?.chapters.orEmpty().filter { it.title.orEmpty().contains(query, true) }
-                        .let { if (reversed) it.asReversed() else it }
-                }
-                LazyColumn(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    items(chapters, key = { it.id }) { chapter ->
-                        val selected = chapter.id == state.chapter?.id
-                        Surface(color = if (selected) MaterialTheme.colors.primary.copy(alpha = .2f)
-                            else MaterialTheme.colors.surface, shape = RoundedCornerShape(10.dp)) {
-                            Column(Modifier.fillMaxWidth().testTag("reader-chapter:${chapter.id}")
-                                .clickable(enabled = enabled) { controller.read(chapter); onClose() }.padding(12.dp)) {
-                                Text(chapter.title ?: "第 ${chapter.number} 章", maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis)
-                                if (selected) Text("正在阅读", fontSize = 11.sp, color = MaterialTheme.colors.primary)
-                            }
-                        }
-                    }
-                }
             } else Column(Modifier.weight(1f).verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 val settings = state.readerSettings

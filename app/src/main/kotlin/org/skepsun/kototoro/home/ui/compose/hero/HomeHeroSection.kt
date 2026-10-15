@@ -1,7 +1,9 @@
 package org.skepsun.kototoro.home.ui.compose.hero
 
 import org.skepsun.kototoro.core.ui.adaptive.TabletLayoutClass
-import org.skepsun.kototoro.home.ui.compose.homeHeroCardWidth
+import org.skepsun.kototoro.core.ui.home.HomeHeroCardSurface
+import org.skepsun.kototoro.core.ui.home.HomeHeroPager
+import org.skepsun.kototoro.core.ui.home.HomeHeroStandardContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -9,9 +11,7 @@ import androidx.compose.foundation.focusGroup
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -21,8 +21,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.PageSize
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -46,20 +44,15 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.TransformOrigin
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.zIndex
 import androidx.compose.animation.ExperimentalSharedTransitionApi
 import coil3.compose.AsyncImage
 import coil3.request.ImageRequest
@@ -78,7 +71,6 @@ import org.skepsun.kototoro.core.ui.theme.LocalInterfaceStyleTokens
 import org.skepsun.kototoro.core.prefs.HomeHeroBackground
 import org.skepsun.kototoro.core.prefs.HomeHeroContentLayout
 import org.skepsun.kototoro.core.prefs.HomeHeroMode
-import org.skepsun.kototoro.core.ui.compose.CompactTopBarHorizontalPadding
 import org.skepsun.kototoro.core.ui.adaptive.LocalUiPresentationConfig
 import org.skepsun.kototoro.core.ui.compose.HeroCoverSnapshotStore
 import org.skepsun.kototoro.core.ui.compose.LocalNavAnimatedVisibilityScope
@@ -151,7 +143,7 @@ internal fun HomeHeroSection(
     val activeTonalColor = remember(activeContentId, isDarkTheme) {
         if (activeContentId != -1L) homeHeroTonalColor(activeContentId, isDarkTheme) else Color.Transparent
     }
-    BoxWithConstraints(
+    Box(
         modifier = modifier
             .fillMaxWidth()
             .drawBehind {
@@ -174,122 +166,65 @@ internal fun HomeHeroSection(
             }
             .padding(top = topContentInset),
     ) {
-        val edgePadding = CompactTopBarHorizontalPadding
-        val pageSpacing = if (isTvPresentation) 16.dp else 6.dp
-        val cardWidth = if (isTvPresentation) {
-            minOf(440.dp, maxWidth * 0.78f).coerceAtMost((maxWidth - edgePadding * 2).coerceAtLeast(0.dp))
-        } else {
-            homeHeroCardWidth(maxWidth, edgePadding, pageSpacing, layoutClass)
-        }
-        val contentPadding = PaddingValues(horizontal = edgePadding)
-        val viewportWidth = maxWidth
-        val density = LocalDensity.current
-        val contentPadPx = with(density) { contentPadding.calculateLeftPadding(LocalLayoutDirection.current).toPx() }
-        val stepPx = with(density) { (cardWidth + pageSpacing).toPx() }
-        val pagerWidthPx = with(density) { viewportWidth.toPx() }
-        val cardWidthPx = with(density) { cardWidth.toPx() }
-
-        HorizontalPager(
-            state = pagerState,
-            pageSize = PageSize.Fixed(cardWidth),
-            pageSpacing = pageSpacing,
-            beyondViewportPageCount = 1,
-            contentPadding = contentPadding,
-            key = { page ->
-                entries.getOrNull(page)?.let { entry ->
-                    "home_hero_${entry.kind.name}_${entry.groupKey}_${entry.content.id}"
-                } ?: "home_hero_pending_$page"
-            },
-            modifier = Modifier
-                .width(viewportWidth)
-                .then(
-                    if (isTvPresentation) {
-                        Modifier.focusRestorer().focusGroup()
-                    } else {
-                        Modifier
-                    },
+        HomeHeroPager(
+            entries = entries,
+            key = { entry -> "home_hero_${entry.kind.name}_${entry.groupKey}_${entry.content.id}" },
+            pagerState = pagerState,
+            layoutClass = layoutClass,
+            tvPresentation = isTvPresentation,
+            holdSelectedCardStill = heroPhase != HeroTransitionPhase.Idle,
+            pagerModifier = if (isTvPresentation) Modifier.focusRestorer().focusGroup() else Modifier,
+        ) { page, entry, cardModifier ->
+            val presentation = resolveHomeHeroPresentation(
+                mode = mode,
+                fixedPresentation = fixedPresentation,
+                signals = HomeHeroStyleSignals(
+                    contentType = entry.content.source.getContentType(),
+                    isResume = entry.kind == HomeHeroKind.RESUME,
+                    hasDistinctLargeCover = entry.content.hasDistinctLargeCover(),
+                    isRecommendation = entry.kind == HomeHeroKind.RECOMMENDATION,
                 ),
-        ) { page ->
-            entries.getOrNull(page)?.let { entry ->
-                val presentation = resolveHomeHeroPresentation(
-                    mode = mode,
-                    fixedPresentation = fixedPresentation,
-                    signals = HomeHeroStyleSignals(
-                        contentType = entry.content.source.getContentType(),
-                        isResume = entry.kind == HomeHeroKind.RESUME,
-                        hasDistinctLargeCover = entry.content.hasDistinctLargeCover(),
-                        isRecommendation = entry.kind == HomeHeroKind.RECOMMENDATION,
-                    ),
-                    page = page,
-                    mixedSeed = mixedSeed,
-                )
-                HomeHeroCard(
-                    entry = entry,
-                    presentation = presentation,
-                    cardHeight = if (isTvPresentation) 240.dp else HOME_HERO_CARD_HEIGHT,
-                    panoramaPrefs = panoramaPrefs,
-                    showIndicator = page == selectedIndex,
-                    indicator = if (entries.size > 1) {
-                        HeroIndicatorState(
-                            pageCount = entries.size,
-                            currentPage = selectedIndex,
-                        )
-                    } else {
-                        null
-                    },
-                    onClick = { content, coverBounds, sharedElementKey ->
-                        // Land the pager before the route changes: the flight's start rect is
-                        // measured from this card the moment Home leaves the composition, so a
-                        // card that is still gliding would be recorded mid-glide and the return
-                        // flight would snap to the settled rect later. `finally` so a cancelled
-                        // scope can never swallow the tap.
-                        val gliding = page == pagerState.currentPage &&
-                            (pagerState.isScrollInProgress || pagerState.currentPageOffsetFraction != 0f)
-                        if (gliding) {
-                            navigationScope.launch {
-                                try {
-                                    pagerState.scrollToPage(page)
-                                } finally {
-                                    onClick(content, coverBounds, sharedElementKey)
-                                }
+                page = page,
+                mixedSeed = mixedSeed,
+            )
+            HomeHeroCard(
+                entry = entry,
+                presentation = presentation,
+                cardHeight = if (isTvPresentation) 240.dp else HOME_HERO_CARD_HEIGHT,
+                panoramaPrefs = panoramaPrefs,
+                showIndicator = page == selectedIndex,
+                indicator = if (entries.size > 1) {
+                    HeroIndicatorState(
+                        pageCount = entries.size,
+                        currentPage = selectedIndex,
+                    )
+                } else {
+                    null
+                },
+                onClick = { content, coverBounds, sharedElementKey ->
+                    // Land the pager before the route changes: the flight's start rect is
+                    // measured from this card the moment Home leaves the composition, so a
+                    // card that is still gliding would be recorded mid-glide and the return
+                    // flight would snap to the settled rect later. `finally` so a cancelled
+                    // scope can never swallow the tap.
+                    val gliding = page == pagerState.currentPage &&
+                        (pagerState.isScrollInProgress || pagerState.currentPageOffsetFraction != 0f)
+                    if (gliding) {
+                        navigationScope.launch {
+                            try {
+                                pagerState.scrollToPage(page)
+                            } finally {
+                                onClick(content, coverBounds, sharedElementKey)
                             }
-                        } else {
-                            onClick(content, coverBounds, sharedElementKey)
                         }
-                    },
-                    modifier = Modifier
-                        .zIndex(if (page == selectedIndex) 1f else 0f)
-                        .graphicsLayer {
-                            val rawOffset = (pagerState.currentPage - page) + pagerState.currentPageOffsetFraction
-                            val signedOffset = rawOffset.coerceIn(-1f, 1f)
-                            val visualLeft = contentPadPx - rawOffset * stepPx
-                            val visualRight = visualLeft + cardWidthPx
-                            val focus = when {
-                                visualRight <= 0f || visualLeft >= pagerWidthPx -> 0f
-                                visualLeft >= 0f && visualRight <= pagerWidthPx -> 1f
-                                visualLeft < 0f -> (visualRight / cardWidthPx).coerceIn(0f, 1f)
-                                else -> ((pagerWidthPx - visualLeft) / cardWidthPx).coerceIn(0f, 1f)
-                            }
-                            val hOrigin = when {
-                                signedOffset < -0.02f -> 0f
-                                signedOffset > 0.02f -> 1f
-                                else -> 0.5f
-                            }
-                            // Scaling about TransformOrigin(_, 0.5f) moves the measured cover
-                            // DOWN by (1 - scale) * cardHeight / 2, so a card that is not at
-                            // rest hands the flight a rect that is both low and small.
-                            val atRest = page == selectedIndex && heroPhase != HeroTransitionPhase.Idle
-                            val visualFocus = if (atRest) 1f else focus
-                            scaleX = 0.9f + (0.1f * visualFocus)
-                            scaleY = 0.9f + (0.1f * visualFocus)
-                            alpha = 0.64f + (0.36f * visualFocus)
-                            transformOrigin = TransformOrigin(hOrigin, 0.5f)
-                        },
-                    focusRequester = heroFocusRequester.takeIf { page == initialFocusPage },
-                )
-            }
+                    } else {
+                        onClick(content, coverBounds, sharedElementKey)
+                    }
+                },
+                modifier = cardModifier,
+                focusRequester = heroFocusRequester.takeIf { page == initialFocusPage },
+            )
         }
-
     }
 }
 
@@ -340,89 +275,72 @@ private fun HomeHeroCard(
     // the top of the page reads as one family with the trays below it.
     val heroCardShape = RoundedCornerShape(LocalInterfaceStyleTokens.current.sectionCornerRadius)
 
-    BoxWithConstraints(
-        modifier = modifier
-            .fillMaxWidth()
-            .height(cardHeight)
-            .clip(heroCardShape)
-            .background(MaterialTheme.colorScheme.surfaceVariant)
-            .then(
-                if (isTvPresentation && focusRequester != null) {
-                    Modifier.focusRequester(focusRequester)
-                } else {
-                    Modifier
-                },
-            )
+    HomeHeroCardSurface(
+        modifier = modifier,
+        cardHeight = cardHeight,
+        onClick = { onClick(content, coverBounds, sharedElementKey) },
+        interactionModifier = Modifier
+            .then(if (isTvPresentation && focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier)
             .onFocusChanged { isFocused = it.isFocused }
-            .then(
-                if (isTvPresentation && isFocused) {
-                    Modifier.border(3.dp, MaterialTheme.colorScheme.primary, heroCardShape)
-                } else {
-                    Modifier
-                },
-            )
-            .clickable { onClick(content, coverBounds, sharedElementKey) },
-    ) {
-        when (presentation.background) {
-            HomeHeroBackground.BLURRED_ARTWORK -> if (panoramaPrefs.isEnabled && backdropRequest != null) {
-                AnimatedPanoramaBackdrop(
-                    prefs = panoramaPrefs,
-                    model = backdropRequest,
-                    placeholderMemoryCacheKey = coverRequest?.memoryCacheKey,
-                    snapshotKey = sharedElementKey,
-                    contentAlpha = 0.94f,
-                    backgroundColor = MaterialTheme.colorScheme.surface,
+            .then(if (isTvPresentation && isFocused) {
+                Modifier.border(3.dp, MaterialTheme.colorScheme.primary, heroCardShape)
+            } else Modifier),
+        artworkScrim = presentation.background == HomeHeroBackground.BLURRED_ARTWORK ||
+            presentation.background == HomeHeroBackground.IMMERSIVE_ARTWORK,
+        background = {
+            when (presentation.background) {
+                HomeHeroBackground.BLURRED_ARTWORK -> if (panoramaPrefs.isEnabled && backdropRequest != null) {
+                    AnimatedPanoramaBackdrop(
+                        prefs = panoramaPrefs,
+                        model = backdropRequest,
+                        placeholderMemoryCacheKey = coverRequest?.memoryCacheKey,
+                        snapshotKey = sharedElementKey,
+                        contentAlpha = 0.94f,
+                        backgroundColor = MaterialTheme.colorScheme.surface,
+                    )
+                } else if (backdropRequest != null) {
+                    AsyncImage(
+                        model = backdropRequest,
+                        contentDescription = content.title,
+                        modifier = Modifier.fillMaxSize(),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+                HomeHeroBackground.TONAL -> Box(
+                    Modifier.fillMaxSize().background(homeHeroTonalColor(content.id, isSystemInDarkTheme())),
                 )
-            } else if (backdropRequest != null) {
-                AsyncImage(
-                    model = backdropRequest,
-                    contentDescription = content.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            }
-            HomeHeroBackground.TONAL -> Box(
-                Modifier.fillMaxSize().background(homeHeroTonalColor(content.id, isSystemInDarkTheme())),
-            )
-            HomeHeroBackground.IMMERSIVE_ARTWORK -> if (coverRequest != null) {
-                AsyncImage(
-                    model = coverRequest,
-                    contentDescription = content.title,
-                    modifier = Modifier.fillMaxSize(),
-                    contentScale = ContentScale.Crop,
-                )
-            }
-            HomeHeroBackground.COVER_SPLIT -> Row(Modifier.fillMaxSize()) {
-                if (coverRequest != null) {
+                HomeHeroBackground.IMMERSIVE_ARTWORK -> if (coverRequest != null) {
                     AsyncImage(
                         model = coverRequest,
                         contentDescription = content.title,
-                        modifier = Modifier.weight(0.46f).fillMaxHeight(),
+                        modifier = Modifier.fillMaxSize(),
                         contentScale = ContentScale.Crop,
                     )
-                } else {
-                    Box(Modifier.weight(0.46f).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceVariant))
                 }
-                Box(
-                    modifier = Modifier
-                        .weight(0.54f)
-                        .fillMaxHeight()
-                        .background(homeHeroTonalColor(content.id, isSystemInDarkTheme())),
+                HomeHeroBackground.COVER_SPLIT -> Row(Modifier.fillMaxSize()) {
+                    if (coverRequest != null) {
+                        AsyncImage(
+                            model = coverRequest,
+                            contentDescription = content.title,
+                            modifier = Modifier.weight(0.46f).fillMaxHeight(),
+                            contentScale = ContentScale.Crop,
+                        )
+                    } else {
+                        Box(Modifier.weight(0.46f).fillMaxHeight().background(MaterialTheme.colorScheme.surfaceVariant))
+                    }
+                    Box(
+                        modifier = Modifier
+                            .weight(0.54f)
+                            .fillMaxHeight()
+                            .background(homeHeroTonalColor(content.id, isSystemInDarkTheme())),
+                    )
+                }
+                HomeHeroBackground.PLAIN -> Box(
+                    Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerHighest),
                 )
             }
-            HomeHeroBackground.PLAIN -> Box(
-                Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surfaceContainerHighest),
-            )
-        }
-        if (presentation.background == HomeHeroBackground.BLURRED_ARTWORK ||
-            presentation.background == HomeHeroBackground.IMMERSIVE_ARTWORK
-        ) {
-            // Slightly heavier at the bottom, where the in-card pager indicator
-            // and the info text sit.
-            Box(Modifier.fillMaxSize().drawBehind {
-                drawRect(org.skepsun.kototoro.core.ui.home.HomeHeroArtworkScrim)
-            })
-        }
+        },
+    ) {
         val textColor = if (presentation.background == HomeHeroBackground.PLAIN) {
             MaterialTheme.colorScheme.onSurface
         } else {
@@ -474,21 +392,29 @@ private fun HomeHeroInfoLayout(
     modifier: Modifier = Modifier,
 ) {
     val isSplit = presentation.background == HomeHeroBackground.COVER_SPLIT
+    if (presentation.contentLayout == HomeHeroContentLayout.STANDARD ||
+        presentation.contentLayout == HomeHeroContentLayout.DETAILS
+    ) {
+        val details = presentation.contentLayout == HomeHeroContentLayout.DETAILS
+        HomeHeroStandardContent(
+            modifier = modifier,
+            splitArtwork = isSplit,
+            posterWidth = if (details) 86.dp else 72.dp,
+            posterHeight = if (details) 126.dp else 112.dp,
+            poster = { width, height ->
+                HomeHeroPoster(coverRequest, content, sharedElementKey, width, height, onBoundsChanged)
+            },
+            text = { textModifier ->
+                HomeHeroText(entry, content, compact = true, textColor = textColor, modifier = textModifier)
+            },
+        )
+        return
+    }
     val contentModifier = modifier.fillMaxSize()
     Row(modifier = contentModifier) {
         if (isSplit) Spacer(Modifier.weight(0.46f))
         Box(modifier = Modifier.weight(if (isSplit) 0.54f else 1f).fillMaxHeight()) {
         when (presentation.contentLayout) {
-            HomeHeroContentLayout.STANDARD -> Row(
-                modifier = Modifier.fillMaxSize().padding(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (!isSplit) {
-                    HomeHeroPoster(coverRequest, content, sharedElementKey, 72.dp, 112.dp, onBoundsChanged)
-                }
-                HomeHeroText(entry, content, compact = true, textColor = textColor, modifier = Modifier.weight(1f))
-            }
             HomeHeroContentLayout.EDITORIAL -> Column(
                 modifier = Modifier.fillMaxSize().padding(18.dp),
                 verticalArrangement = Arrangement.SpaceBetween,
@@ -509,16 +435,7 @@ private fun HomeHeroInfoLayout(
                 bottomAvoidance = bottomAvoidance,
                 modifier = Modifier.fillMaxSize(),
             )
-            HomeHeroContentLayout.DETAILS -> Row(
-                modifier = Modifier.fillMaxSize().padding(14.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                if (!isSplit) {
-                    HomeHeroPoster(coverRequest, content, sharedElementKey, 86.dp, 126.dp, onBoundsChanged)
-                }
-                HomeHeroText(entry, content, compact = true, textColor = textColor, modifier = Modifier.weight(1f))
-            }
+            HomeHeroContentLayout.STANDARD, HomeHeroContentLayout.DETAILS -> Unit
         }
         }
     }

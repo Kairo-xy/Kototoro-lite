@@ -82,6 +82,8 @@ data class DesktopAppState(
     val detailsExpanded: Boolean = false,
     /** Chapter branch (translation) shown in the details chapter list. */
     val chapterBranch: String? = null,
+    /** Current chapter projected from this work's history; never inherited from a different open work. */
+    val detailsChapterId: Long? = null,
     /** Home's history row; separate from [library], which the favourites/history pages own. */
     val homeHistory: DesktopLibrarySnapshot = DesktopLibrarySnapshot(),
     /** Android's feed read model (update logs and works with pending new chapters). */
@@ -397,10 +399,15 @@ class DesktopController(val session: DesktopSession) {
         val details = session.sources.getDetails(content, SourceDetailsFetchMode.FORCE_REFRESH)
         session.library.save(details)
         val favourite = session.library.isFavourite(details.id)
+        val progress = session.library.progress(details.id)
+        val chapterId = progress?.let { recoverHistoryChapterId(false, it.chapterId, it.parentChapterId,
+            it.percent, details.chapters.orEmpty().map(SourceChapter::id)) ?: it.chapterId }
+        val bookmarks = session.library.bookmarks(details.id)
         val branch = resolvePreferredChapterBranch(details.chapters.orEmpty(), SourceChapter::branch,
-            SourceChapter::id, session.library.progress(details.id)?.chapterId, desktopChapterBranchLocales())
+            SourceChapter::id, chapterId, desktopChapterBranchLocales())
         mutableState.update { it.copy(screen = DesktopScreen.DETAILS, content = details,
-            detailsOrigin = origin, detailsExpanded = false, isFavourite = favourite, chapterBranch = branch) }
+            detailsOrigin = origin, detailsExpanded = false, isFavourite = favourite, chapterBranch = branch,
+            detailsChapterId = chapterId, bookmarks = bookmarks) }
     }
 
     internal fun exploreFilter(filter: DesktopSourceFilter) {
@@ -1252,7 +1259,12 @@ class DesktopController(val session: DesktopSession) {
 
     fun backToDetails() = action {
         closeCast(resume = false)
-        mutableState.update { it.copy(screen = DesktopScreen.DETAILS) }
+        mutableState.update { it.copy(screen = DesktopScreen.DETAILS, detailsChapterId = when (it.screen) {
+            DesktopScreen.READER -> it.chapter?.id
+            DesktopScreen.NOVEL -> it.novel?.chapter?.id
+            DesktopScreen.VIDEO -> it.video?.chapter?.id
+            else -> it.detailsChapterId
+        }) }
     }
 
     private fun sourceDescriptors() = session.sourceListings()

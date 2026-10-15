@@ -18,6 +18,23 @@ class ChapterGroupingTest {
     )
 
     @Test
+    fun `chapter search includes unnamed numbers volumes and case insensitive titles`() {
+        assertTrue(chapterMatchesQuery("wind", "The WIND", "8.5", "2"))
+        assertTrue(chapterMatchesQuery("8.5", null, "8.5", "2"))
+        assertTrue(chapterMatchesQuery("2", "", null, "2"))
+        assertFalse(chapterMatchesQuery("missing", null, "8.5", "2"))
+        assertFalse(chapterMatchesQuery("5", null, null, null))
+    }
+
+    @Test
+    fun `read state follows known volumes when chapter numbers restart`() {
+        assertTrue(chapterIsAfter(1f, 2, 50f, 1))
+        assertFalse(chapterIsAfter(50f, 1, 1f, 2))
+        assertTrue(chapterIsAfter(10.5f, 0, 10f, 2))
+        assertFalse(chapterIsAfter(10f, 2, 10f, 2))
+    }
+
+    @Test
     fun `history branch wins, then the locale match, then the largest branch`() {
         assertEquals(null, preferred(mixed, history = 6))
         assertEquals("中文翻译组", preferred(mixed))

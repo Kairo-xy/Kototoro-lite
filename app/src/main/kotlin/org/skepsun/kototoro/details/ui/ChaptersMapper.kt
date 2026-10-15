@@ -141,11 +141,7 @@ fun ContentDetails.mapChapters(
 }
 
 private fun ContentChapter.isAfter(current: ContentChapter): Boolean {
-    return if (volume > 0 && current.volume > 0 && volume != current.volume) {
-        volume > current.volume
-    } else {
-        number > current.number
-    }
+    return org.skepsun.kototoro.core.ui.chapters.chapterIsAfter(number, volume, current.number, current.volume)
 }
 
 /** A lone "Unknown volume" header says nothing; only group when some chapter has a volume or group name. */

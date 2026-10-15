@@ -39,6 +39,15 @@ fun <T> resolvePreferredChapterBranch(
 
 data class ChapterBranchOption(val name: String?, val chaptersCount: Int)
 
+/** Android searches titles and the chapter/volume labels, including unnamed chapters. */
+fun chapterMatchesQuery(query: String, title: String?, number: String?, volume: String?): Boolean =
+    title?.contains(query, ignoreCase = true) == true ||
+        number?.contains(query) == true || volume?.contains(query) == true
+
+/** A known volume takes precedence over chapter numbers, which may restart in the next volume. */
+fun chapterIsAfter(number: Float, volume: Int, currentNumber: Float, currentVolume: Int): Boolean =
+    if (volume > 0 && currentVolume > 0 && volume != currentVolume) volume > currentVolume else number > currentNumber
+
 /**
  * Branch chips are offered only when a work has more than one branch, sorted by [comparator]; an inconsistent
  * locale comparator keeps the source order instead of failing, as Android's `sortedWithSafe` does in release.

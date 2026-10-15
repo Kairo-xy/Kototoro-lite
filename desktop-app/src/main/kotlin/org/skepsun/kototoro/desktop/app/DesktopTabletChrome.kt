@@ -4,8 +4,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -18,7 +16,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.skepsun.kototoro.core.source.SourceChapter
@@ -141,6 +138,7 @@ private fun MoreDestination(title: String, icon: String, description: String, en
 @Composable
 internal fun DesktopTabletDetails(controller: DesktopController, state: DesktopAppState) {
     val content = state.content ?: return
+    val directory = remember(content.id) { DesktopDetailsChapterState() }
     BoxWithConstraints(Modifier.fillMaxSize()) {
         DesktopArtworkBackground(content, controller.session.covers, Modifier.matchParentSize())
         val expanded = tabletLayoutClass(LocalDesktopWindowWidth.current.value.toInt(), true) == TabletLayoutClass.EXPANDED
@@ -188,19 +186,11 @@ internal fun DesktopTabletDetails(controller: DesktopController, state: DesktopA
                     Surface(paneModifier, shape = RoundedCornerShape(20.dp),
                         color = MaterialTheme.colors.surface.copy(alpha = .92f)) { metadata(Modifier.fillMaxSize()) }
                 },
-                chapters = { paneModifier -> ChapterList(controller, state, paneModifier) },
+                chapters = { paneModifier -> DesktopDetailsChapters(controller, state, directory, paneModifier) },
             )
         } else {
-            val list = remember(content.chapters, state.chapterBranch) {
-                desktopChapterList(content.chapters.orEmpty(), state.chapterBranch, "", false)
-            }
-            LazyColumn(Modifier.fillMaxSize().testTag("details-stacked"),
-                verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                item { metadata(Modifier.fillMaxWidth()) }
-                item { Text("章节 · ${list.count}", fontWeight = FontWeight.SemiBold) }
-                item { DesktopChapterBranches(controller, state, list) }
-                chapterSections(controller, state, list)
-            }
+            DesktopDetailsChapters(controller, state, directory, Modifier.fillMaxSize().testTag("details-stacked"),
+                leadingContent = { metadata(Modifier.fillMaxWidth()) })
         }
     }
 }
@@ -219,73 +209,8 @@ internal fun desktopChapterList(chapters: List<SourceChapter>, branch: String?, 
     val options = chapterBranchOptions(chapters, SourceChapter::branch, nullsFirst(Comparator { a, b -> collator.compare(a, b) }))
     val branchChapters = chaptersOfBranch(chapters, SourceChapter::branch, branch)
     val visible = branchChapters.let { if (reversed) it.asReversed() else it }
-        .filter { it.title.orEmpty().contains(query, true) }
+        .filter { query.isEmpty() || chapterMatchesQuery(query, it.title,
+            it.numberLabel(), it.volume.takeIf { volume -> volume > 0 }?.toString()) }
     return DesktopChapterList(options, branchChapters.firstOrNull()?.branch.takeIf { options.isNotEmpty() },
         branchChapters.size, withVolumeSections(visible, SourceChapter::volume, SourceChapter::scanlator))
-}
-
-private fun ChapterSection.Header.title(): String = customName ?: if (volume <= 0) "未知卷" else "第 $volume 卷"
-
-@Composable
-private fun DesktopChapterBranches(controller: DesktopController, state: DesktopAppState, list: DesktopChapterList) {
-    ChapterBranchChips(list.options, list.selectedBranch, title = { it ?: "默认" },
-        onSelect = controller::selectChapterBranch, enabled = !state.busy,
-        chipModifier = { Modifier.testTag("chapter-branch:${it.name ?: "default"}") })
-}
-
-private fun androidx.compose.foundation.lazy.LazyListScope.chapterSections(controller: DesktopController,
-    state: DesktopAppState, list: DesktopChapterList) {
-    items(list.sections.size, key = { index ->
-        when (val section = list.sections[index]) {
-            is ChapterSection.Header -> "header:$index:${section.title()}"
-            is ChapterSection.Item -> section.chapter.id
-        }
-    }) { index ->
-        when (val section = list.sections[index]) {
-            is ChapterSection.Header -> ChapterSectionHeader(section.title(),
-                Modifier.testTag("chapter-header:${section.title()}"))
-            is ChapterSection.Item -> ChapterRow(controller, state, section.chapter)
-        }
-    }
-}
-
-@Composable
-private fun ChapterList(controller: DesktopController, state: DesktopAppState, modifier: Modifier) {
-    var query by remember(state.content?.id) { mutableStateOf("") }
-    var reversed by remember(state.content?.id) { mutableStateOf(false) }
-    val list = remember(state.content?.chapters, state.chapterBranch, query, reversed) {
-        desktopChapterList(state.content?.chapters.orEmpty(), state.chapterBranch, query, reversed)
-    }
-    Column(modifier, verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Text("章节 · ${list.count}", fontSize = 20.sp, fontWeight = FontWeight.SemiBold,
-                modifier = Modifier.weight(1f))
-            TextButton({ reversed = !reversed }) { Text(if (reversed) "倒序" else "正序") }
-        }
-        DesktopChapterBranches(controller, state, list)
-        OutlinedTextField(query, { query = it }, placeholder = { Text("搜索章节") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth().testTag("details-chapter-query"))
-        LazyColumn(Modifier.weight(1f).testTag("details-chapter-list"), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            chapterSections(controller, state, list)
-        }
-    }
-}
-
-@Composable
-private fun ChapterRow(controller: DesktopController, state: DesktopAppState, chapter: SourceChapter) {
-    Surface(shape = RoundedCornerShape(12.dp)) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            val video = DesktopReaderKind.of(state.content) == DesktopReaderKind.VIDEO
-            Text(chapter.title ?: if (video) "第 ${chapter.number} 集" else "第 ${chapter.number} 章", modifier = Modifier.weight(1f),
-                maxLines = 2, overflow = TextOverflow.Ellipsis)
-            // Chapter downloads store page images; text and video chapters have no such download yet.
-            if (DesktopReaderKind.of(state.content) == DesktopReaderKind.PAGES) {
-                TextButton({ controller.downloadChapter(chapter) }, enabled = !state.busy,
-                    modifier = Modifier.testTag("download-chapter:${chapter.id}")) { Text("下载") }
-            }
-            TextButton({ controller.read(chapter) }, enabled = !state.busy,
-                modifier = Modifier.testTag("read-chapter:${chapter.id}")) { Text(if (video) "播放 →" else "阅读 →") }
-        }
-    }
 }

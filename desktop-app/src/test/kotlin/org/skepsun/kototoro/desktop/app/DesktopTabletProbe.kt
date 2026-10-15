@@ -264,7 +264,10 @@ internal object DesktopTabletProbe {
                 onNodeWithTag("home-hero").assertExists()
                 onNodeWithTag("home-history:${content.id}").assertExists()
                 onNodeWithTag("home-update:${content.id}").assertExists()
-                onNodeWithTag("home-quick-access").assertExists()
+                // The shared Android layout lazily composes quick access below the highlights on narrow panes.
+                onNodeWithTag("home-scroll").performScrollToNode(hasTestTag("home-quick-access"))
+                onNodeWithTag("home-quick-access").assertIsDisplayed()
+                onNodeWithTag("home-scroll").performScrollToIndex(0)
                 // Recommendations: Android's suggestion rules over the installed fixture source.
                 // Suggestions are off by default, as on Android; the home button enables and generates them.
                 check(!controller.state.value.suggestionSettings.enabled)

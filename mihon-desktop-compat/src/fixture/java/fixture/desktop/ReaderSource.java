@@ -84,12 +84,13 @@ public final class ReaderSource extends HttpSource {
     @Override public Observable<SManga> fetchMangaDetails(SManga original) { return Observable.just(original); }
     @Override public Observable<List<SChapter>> fetchChapterList(SManga original) {
         List<SChapter> chapters = new ArrayList<>();
-        if (Boolean.getBoolean("fixture.reader.branches")) {
+        if (Boolean.getBoolean("fixture.reader.branches") || Boolean.getBoolean("fixture.reader.directory")) {
             SChapter alternate = new SChapterImpl(); alternate.setName("Other branch");
             alternate.setUrl("/reader/other-branch"); alternate.setChapter_number(3);
             alternate.setScanlator("other branch"); chapters.add(alternate);
         }
-        for (int number = 2; number >= 1; number--) {
+        int maximum = Boolean.getBoolean("fixture.reader.directory") ? 120 : 2;
+        for (int number = maximum; number >= 1; number--) {
             SChapter chapter = new SChapterImpl(); chapter.setName("Chapter " + number);
             chapter.setUrl("/reader/chapter-" + number); chapter.setChapter_number(number); chapters.add(chapter);
         }

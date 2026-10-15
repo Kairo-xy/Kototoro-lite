@@ -114,6 +114,9 @@ internal fun DesktopReader(controller: DesktopController, state: DesktopAppState
                     onToggleFullscreen, autoScroll, onDismiss = { panel = null; focus.requestFocus() },
                     onOpenChapters = { panel = DesktopReaderPanel.CHAPTERS },
                     onOpenSettings = { panel = DesktopReaderPanel.MORE })
+                DesktopReaderPanel.CHAPTERS -> DesktopReaderChaptersPanel(controller, state, enabled) {
+                    panel = null; focus.requestFocus()
+                }
                 else -> DesktopReaderSidePanel(controller, state, selected, enabled,
                     Modifier.align(Alignment.CenterEnd).padding(top = 64.dp, bottom = 16.dp)) {
                     panel = null; focus.requestFocus()

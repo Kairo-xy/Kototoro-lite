@@ -6052,3 +6052,83 @@ UI（真实扩展预览）新增 `SourceRuntimeTests.testReopenedLongChapterList
   再按该编号 `sortedWith` 排序后返回；其"源顺序"即为错乱顺序，与 Mihon 中所见一致，宿主保留源顺序不能修正该源。
 - UI：新增 `SourceRuntimeTests.testChapterOrderMenuDefaultsToSourceOrder`（默认源顺序、菜单四个选项、切换章节号与恢复）通过；
   `testConvertedRealMihonApkRunsOnSimulator`、`testAniyomiEpisodePlays` 回归通过。
+
+## 122. Android / Windows 主页布局与 Hero 直接共用（2026-10-14）
+
+**目标与当前边界**
+
+- Windows 已经使用 Compose Desktop，但旧页面仍混有独立 Material 2 呈现；相同技术和相似外观
+  不等于同一份 UI 源码。后续以 Android 现有呈现为基础提取到 `core-ui/commonMain`，两端直接调用。
+- 本轮统一主页页面布局与 Hero。历史、更新、推荐的业务投影和分区装配仍在宿主；订阅页容器、
+  详情内部和其余 Material 2 页面仍需逐项提取。没有宣称整应用已经完成共享 UI 迁移。
+
+**同一份 Compose 实现**
+
+- `HomeScreenLayout` 接管原 Android 的 LazyColumn、最大内容宽度、双栏比例、快捷入口位置、
+  加载占位、Hero 测量与随滚动的布局位移。断点根据主页内容面板自身宽度决定，不包含导航栏。
+- `HomeHeroPager` 接管卡片宽度、内容边距、稳定 key、预组合、滑动缩放/透明度和选中卡片的
+  转场静止策略。`HomeHeroCardSurface` 与 `HomeHeroStandardContent` 共用卡片和海报/文字排列。
+- Android 原入口直接委托共同实现；系统 inset、滚动 interop、TV 焦点、Coil/全景背景和
+  shared-element 回调留在宿主。原背景和内容布局偏好继续有效，TV Hero 仍置于垂直懒列表内。
+- Windows 原入口同样委托共同实现，沿用来源模型、扩展图片客户端、Controller 和存储。
+  移除独立主页的滚动容器、宽度判断、双栏与 Hero 编排；主页不再消费 Material 2 的主题状态。
+- 未新增依赖、偏好键、数据库迁移或备份字段。呈现放在共同层、数据和平台回调保留适配边界，
+  避免复制页面，也避免把 Android/JVM 服务带入共同源码。
+
+**验证设计**
+
+- 新共享主页 UI 测试覆盖两种主题、520 / 999 / 1000 / 1720dp 内容面板、宽屏居中、
+  窄屏快捷入口可滚动到达、Hero 高度变化与滚动后实际布局坐标、视口裁剪及顶部工具栏像素、
+  TV 懒列表及加载状态。
+- Hero 测试覆盖实际卡片几何、点击身份、数据缩减和清空。既有 fixture 平板流程继续覆盖真实
+  来源、详情、漫画阅读、订阅、推荐和快捷入口；窄屏探针按 LazyColumn 行为滚动到入口后操作。
+- 列表与 key 策略参考 [Compose 官方列表文档](https://developer.android.com/develop/ui/compose/lists)。
+  Android 真机转场、TV D-pad 和 iOS 原生构建仍待设备验证。
+
+**验证结果**
+
+- 最终 `:core-ui:jvmTest` 24 项、共享主页 UI 4 项、原有平板全流程 1 项通过，共 29 项，
+  0 失败、0 跳过；该全流程包含 1260×850、920×620、1000×850 和 999×620 四个独立窗口探针。
+- `:app:compileDebugKotlin` 通过；JVM / Android 共享 UI 与 Windows 应用、测试源码编译通过。
+  最终回归日志为本轮工作目录的 `shared-home-final-validation.log`。
+- 实际检查了宽/窄主页和深色共享布局截图；修复窄窗口滚动时 Hero 越过视口覆盖标题的问题，
+  并加入裁剪与工具栏像素断言。加载状态测试沿用懒列表的稳定 key，先滚回插入的 Hero 再验证显示。
+- `git diff --check` 通过；没有执行用户数据操作或 Android 真机 / TV 设备视觉验收。
+- 隔离构建目录生成 Windows 便携包；`windowsDistributionTest` 1 项通过，验证随包 JVM、
+  原生 EXE、移动后的运行时、真实来源浏览及窗口关闭。连同上述测试共 30 项通过。
+  已检查 ZIP 包含本轮三组共享主页组件的编译类；打包日志为 `shared-home-package.log`。
+
+## 123. 共享鼠标拖动滚动与主页手势（2026-10-14）
+
+**复现与原因**
+
+- 检查项目实际依赖的 Compose Foundation Desktop 1.12.0 源码，`CanDragCalculation` 明确排除
+  `PointerType.Mouse`。列表/分页已有触摸和滚轮支持，但鼠标按住封面拖动不会自动触发滚动。
+  来源为 [该版本的官方源码包](https://repo.maven.apache.org/maven2/org/jetbrains/compose/foundation/foundation-desktop/1.12.0/foundation-desktop-1.12.0-sources.jar)。
+- 用实际 `DesktopHomePanel` 和 30 条自有历史/推荐数据注入鼠标按下、移动、松开事件，修复前
+  历史横栏的实际语义滚动位置保持为 0，定向测试失败。此前触摸/语义滚动检查没有覆盖这类输入。
+
+**共用实现与接入**
+
+- `core-ui/commonMain` 的 `mouseDragScroll` 接入既有 `ScrollableState`，仅处理鼠标主键。
+  超过拖动阈值后按主方向接管，纵向手势交给父级；轻点、右键、触摸和滚轮沿用原处理。
+- 整次拖动持有同一个 UserInput 滚动事务，取代旧惯性；松手速度交给 Compose 自身的 fling。
+  Hero 复用 PagerDefaults 的吸附行为，方向通过 ScrollableDefaults 统一处理 RTL 与反向列表。
+  手势取消、禁用或组件离开时取消所属任务并释放滚动事务。
+- 接入主页历史/推荐横栏、共享主页纵向列表、Hero、订阅更新横栏，以及共享分类/来源筛选横栏。
+  Android 与 Windows 使用同一手势源码，呈现和 Controller/数据适配沿用既有边界。
+
+**验证**
+
+- `:core-ui:jvmTest` 24 项、桌面定向测试 12 项，共 36 项通过，0 失败、0 跳过；
+  `:app:compileDebugKotlin` 与共享 JVM / Android、Windows 编译通过。
+- 新鼠标 UI 测试覆盖双向拖动、惯性、新拖动停止旧惯性、禁用后释放事务、阈值内轻点、
+  边界拖动不误开作品、右键、父子方向衔接、RTL/反向布局、触摸与原生滚轮，以及 Hero 吸附。
+  订阅横栏和顶部筛选/分类也注入实际鼠标事件，确认拖动不触发选择回调。
+- 主页模型/Controller 探针验证 30 条历史/推荐的封面位置变化和无详情误触；原平板流程覆盖
+  四种窗口尺寸，原漫画阅读手势另覆盖拖动、点击、滚轮、预取与跨进程设置恢复。
+- 测试数据来自自有夹具。最终回归日志为 `mouse-scroll-final-validation.log`；截图保存到
+  `desktop-app/build/reports/desktop-smoke/*-mouse-drag.png`。`git diff --check` 通过。
+- 新 Windows 便携包的 `windowsDistributionTest` 1 项通过，含随包原生窗口/运行时检查；
+  连同前述测试共 37 项通过。隔离目录再次通过实际主页鼠标测试，已检查 ZIP 内含共享鼠标手势类。
+  打包日志为 `mouse-scroll-package.log`。

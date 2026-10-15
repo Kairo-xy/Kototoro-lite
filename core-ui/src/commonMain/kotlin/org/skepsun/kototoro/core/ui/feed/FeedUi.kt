@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyListState
@@ -38,6 +39,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import org.skepsun.kototoro.core.ui.gestures.mouseDragScroll
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
@@ -313,7 +315,7 @@ fun <T> UpdatedContentCarousel(
             }
             LazyRow(
                 state = listState,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().mouseDragScroll(listState, Orientation.Horizontal),
                 contentPadding = PaddingValues(start = screenPadding, end = screenPadding),
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {

@@ -12,7 +12,8 @@ def readerPanelIcons = ['ic_arrow_forward', 'ic_settings', 'ic_reader_ltr', 'ic_
     'ic_gesture_vertical', 'ic_move_horizontal', 'ic_fullscreen', 'ic_swap_vert', 'ic_size_large', 'ic_grid',
     'ic_bookmark', 'ic_save', 'ic_crop', 'ic_timer', 'ic_screen_rotation', 'ic_download', 'ic_web', 'ic_translate',
     'ic_tap', 'ic_prev', 'ic_next', 'ic_more_vert', 'ic_zoom_in', 'ic_zoom_out', 'ic_timer_run', 'ic_bookmark_added',
-    'ic_screen_rotation_lock', 'ic_current_chapter', 'ic_sort_desc', 'ic_search', 'ic_tts_close', 'ic_delete']
+    'ic_screen_rotation_lock', 'ic_current_chapter', 'ic_sort_desc', 'ic_search', 'ic_tts_close', 'ic_delete',
+    'ic_storage', 'ic_save_ok', 'ic_new']
 def generatedIconSources = layout.buildDirectory.dir('generated/reader-panel-icons/kotlin')
 def generateReaderPanelIcons = tasks.register('generateReaderPanelIcons') {
     def vectors = readerPanelIcons.collect { rootProject.file("app/src/main/res/drawable/${it}.xml") }
