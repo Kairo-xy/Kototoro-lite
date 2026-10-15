@@ -81,7 +81,11 @@ final class RepositoriesModel: ObservableObject {
     }
 
     private static func resourceURL(_ path: String, catalog: IosRepositoryCatalog) -> URL? {
-        guard !path.isEmpty, let base = URL(string: catalog.resourceBaseUrl),
+        guard !path.isEmpty else { return nil }
+        if let direct = URL(string: path), direct.scheme != nil { return direct }
+        var baseStr = catalog.resourceBaseUrl
+        if !baseStr.hasSuffix("/") { baseStr += "/" }
+        guard let base = URL(string: baseStr),
               let url = URL(string: path, relativeTo: base)?.absoluteURL,
               ["http", "https"].contains(url.scheme ?? "") else { return nil }
         return url
@@ -363,8 +367,9 @@ final class RepositoriesModel: ObservableObject {
         for url in candidates {
             do {
                 let (bytes, actual) = try await indexData(url)
+                let normalizedUrl = Self.normalizeRepoURL(actual.absoluteString)
                 var result = try store.decode(bytes: kotlinBytes(bytes), protobuf: url.pathExtension.lowercased() == "pb",
-                                              url: actual.absoluteString, kind: link.kind)
+                                              url: normalizedUrl, kind: link.kind)
                 if let external = result.externalList, let target = URL(string: external, relativeTo: actual)?.absoluteURL {
                     let (list, listURL) = try await indexData(target)
                     result = try store.external(catalog: result, bytes: kotlinBytes(list), protobuf: target.pathExtension.lowercased() == "pb",
@@ -384,8 +389,22 @@ final class RepositoriesModel: ObservableObject {
         guard data.count <= 20 * 1024 * 1024, let actual = response.url else { throw URLError(.dataLengthExceedsMaximum) }
         return (data, actual)
     }
+    static func normalizeRepoURL(_ urlString: String) -> String {
+        var clean = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        for suffix in ["/index.min.json", "/index.json", "/index.pb", "/repo.json"] {
+            if clean.hasSuffix(suffix) {
+                clean = String(clean.dropLast(suffix.count))
+            }
+        }
+        while clean.hasSuffix("/") && clean.count > 8 {
+            clean = String(clean.dropLast())
+        }
+        return clean
+    }
     private func fingerprint(_ catalog: IosRepositoryCatalog) -> String {
-        SHA256.hash(data: Data((catalog.signingKey.isEmpty ? catalog.url : catalog.signingKey).utf8))
+        let normUrl = Self.normalizeRepoURL(catalog.url)
+        let key = catalog.signingKey.isEmpty ? normUrl : catalog.signingKey
+        return SHA256.hash(data: Data(key.utf8))
             .map { String(format: "%02x", $0) }.joined()
     }
     private func kotlinBytes(_ data: Data) -> KotlinByteArray {

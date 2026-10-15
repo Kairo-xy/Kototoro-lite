@@ -8,6 +8,7 @@ struct ReaderChapterPanel: View {
     let onJump: (Int) -> Void
     let onChapter: (IosSourceChapter) -> Void
     let onBookmark: (IosBookmark) -> Void
+    var onSelectPage: ((IosSourceChapter, Int) -> Void)? = nil
     @State private var tab = 0
     @State private var query = ""
     @State private var branch: String?
@@ -22,6 +23,22 @@ struct ReaderChapterPanel: View {
     @State private var busy = false
     @State private var expandedVolumes: Set<Int32> = []
     @State private var showingDownloads = false
+
+    init(
+        model: SourceReaderModel,
+        initialTab: Int = 0,
+        onJump: @escaping (Int) -> Void,
+        onChapter: @escaping (IosSourceChapter) -> Void,
+        onBookmark: @escaping (IosBookmark) -> Void,
+        onSelectPage: ((IosSourceChapter, Int) -> Void)? = nil
+    ) {
+        self.model = model
+        _tab = State(initialValue: initialTab)
+        self.onJump = onJump
+        self.onChapter = onChapter
+        self.onBookmark = onBookmark
+        self.onSelectPage = onSelectPage
+    }
 
     private var branches: [String] { Array(Set(model.content.chapters.compactMap(\.branch))).sorted() }
     private var chapters: [IosSourceChapter] {
@@ -41,31 +58,33 @@ struct ReaderChapterPanel: View {
     var body: some View {
         VStack(spacing: 10) {
             Picker("内容", selection: $tab) {
-                Text("章节").tag(0); Text("页面").tag(1); Text("书签").tag(2)
-            }.pickerStyle(.segmented).padding(.horizontal, 12)
-            HStack {
-                if tab == 0 && branches.count > 1 {
-                    Menu(branch ?? "全部分支") {
-                        Button("全部分支") { branch = nil }
-                        ForEach(branches, id: \.self) { value in Button(value) { branch = value } }
+                Text("章节").tag(0)
+                Text("缩略图").tag(1)
+                Text("书签").tag(2)
+            }
+            .pickerStyle(.segmented)
+            .padding(.horizontal, 12)
+
+            if tab == 0 {
+                HStack {
+                    if branches.count > 1 {
+                        Menu(branch ?? "全部分支") {
+                            Button("全部分支") { branch = nil }
+                            ForEach(branches, id: \.self) { value in Button(value) { branch = value } }
+                        }
                     }
-                }
-                TextField(tab == 1 ? "输入页数" : "搜索章节", text: $query).textFieldStyle(.roundedBorder)
-                Menu("筛选", systemImage: "line.3.horizontal.decrease") {
-                    Toggle("倒序", isOn: $reverse)
-                    Toggle("网格", isOn: $grid)
-                    if tab == 0 {
+                    TextField("搜索章节", text: $query).textFieldStyle(.roundedBorder)
+                    Menu("筛选", systemImage: "line.3.horizontal.decrease") {
+                        Toggle("倒序", isOn: $reverse)
+                        Toggle("网格", isOn: $grid)
                         Toggle("隐藏当前章之前的章节", isOn: $hideRead)
                         Toggle("仅已下载", isOn: $downloadedOnly)
                         Toggle("合并重复章节", isOn: $mergeDuplicates)
-                    }
-                }.labelStyle(.iconOnly)
-                if tab == 0 {
+                    }.labelStyle(.iconOnly)
                     Button(selecting ? "完成" : "多选") { selecting.toggle(); selection = [] }
-                }
-            }.padding(.horizontal, 12)
-            ScrollView {
-                if tab == 0 {
+                }.padding(.horizontal, 12)
+
+                ScrollView {
                     if grid {
                         LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))], spacing: 8) {
                             ForEach(chapters, id: \.id) { chapter in chapterButton(chapter) }
@@ -82,52 +101,74 @@ struct ReaderChapterPanel: View {
                             }
                         }.padding(12)
                     }
-                } else if tab == 1 {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 64))]) {
-                        ForEach(model.pages.indices.filter { query.isEmpty || String($0 + 1).contains(query) }, id: \.self) { index in
-                            Button("第 \(index + 1) 页") { onJump(index) }
-                                .buttonStyle(.glass).tint(index == model.index ? .accentColor : .secondary)
-                        }
-                    }.padding(12)
-                } else if model.bookmarks.isEmpty {
-                    ContentUnavailableView("暂无书签", systemImage: "bookmark")
-                } else {
-                    LazyVStack(spacing: 12) {
-                        ForEach(model.bookmarks.filter { bookmark in
-                            query.isEmpty || (model.content.chapters.first { $0.id == bookmark.chapterId }?.title ?? "")
-                                .localizedCaseInsensitiveContains(query)
-                        }, id: \.id) { bookmark in
-                            HStack {
-                                Button { onBookmark(bookmark) } label: {
-                                    VStack(alignment: .leading) {
-                                        Text(model.content.chapters.first { $0.id == bookmark.chapterId }?.title ?? "章节")
-                                        Text("第 \(bookmark.index + 1) 页").font(.caption).foregroundStyle(.secondary)
-                                    }
-                                }
-                                Spacer()
-                                Button("删除", systemImage: "trash") { Task { await model.removeBookmark(bookmark) } }
-                                    .labelStyle(.iconOnly)
-                            }
-                        }
-                    }.padding(12)
                 }
-            }
-            if let status { Text(status).font(.caption).padding(.horizontal, 12) }
-            Button("下载队列", systemImage: "arrow.down.circle") { showingDownloads = true }
-                .accessibilityIdentifier("reader.downloads")
-            if selecting {
+
+                if let status { Text(status).font(.caption).padding(.horizontal, 12) }
+                Button("下载队列", systemImage: "arrow.down.circle") { showingDownloads = true }
+                    .accessibilityIdentifier("reader.downloads")
+                if selecting {
+                    HStack {
+                        Button("全选") { selection = Set(chapters.map(\.id)) }
+                        Button("区间") {
+                            let indices = chapters.indices.filter { selection.contains(chapters[$0].id) }
+                            if let low = indices.min(), let high = indices.max() { selection = Set(chapters[low...high].map(\.id)) }
+                        }.disabled(selection.count < 2)
+                        Spacer()
+                        Button("下载") { batch(download: true) }
+                            .disabled(selection.isEmpty)
+                        Button("移除下载") { batch(download: false) }
+                            .disabled(selection.isEmpty)
+                    }.padding(12).disabled(busy)
+                }
+            } else if tab == 1 {
+                ChapterThumbnailsView(
+                    runtime: model.runtime,
+                    details: model.content,
+                    chapters: chapters,
+                    initialChapter: model.chapter,
+                    initialPages: model.pages,
+                    currentReadingPage: model.index,
+                    memoryImages: model.images,
+                    resume: nil,
+                    onSelectPage: { chapter, pageIndex in
+                        if let onSelectPage {
+                            onSelectPage(chapter, pageIndex)
+                        } else if chapter.id == model.chapter.id {
+                            onJump(pageIndex)
+                        } else {
+                            onChapter(chapter)
+                        }
+                    }
+                )
+            } else {
                 HStack {
-                    Button("全选") { selection = Set(chapters.map(\.id)) }
-                    Button("区间") {
-                        let indices = chapters.indices.filter { selection.contains(chapters[$0].id) }
-                        if let low = indices.min(), let high = indices.max() { selection = Set(chapters[low...high].map(\.id)) }
-                    }.disabled(selection.count < 2)
-                    Spacer()
-                    Button("下载") { batch(download: true) }
-                        .disabled(selection.isEmpty)
-                    Button("移除下载") { batch(download: false) }
-                        .disabled(selection.isEmpty)
-                }.padding(12).disabled(busy)
+                    TextField("搜索书签", text: $query).textFieldStyle(.roundedBorder)
+                }.padding(.horizontal, 12)
+
+                ScrollView {
+                    if model.bookmarks.isEmpty {
+                        ContentUnavailableView("暂无书签", systemImage: "bookmark")
+                    } else {
+                        LazyVStack(spacing: 12) {
+                            ForEach(model.bookmarks.filter { bookmark in
+                                query.isEmpty || (model.content.chapters.first { $0.id == bookmark.chapterId }?.title ?? "")
+                                    .localizedCaseInsensitiveContains(query)
+                            }, id: \.id) { bookmark in
+                                HStack {
+                                    Button { onBookmark(bookmark) } label: {
+                                        VStack(alignment: .leading) {
+                                            Text(model.content.chapters.first { $0.id == bookmark.chapterId }?.title ?? "章节")
+                                            Text("第 \(bookmark.index + 1) 页").font(.caption).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    Spacer()
+                                    Button("删除", systemImage: "trash") { Task { await model.removeBookmark(bookmark) } }
+                                        .labelStyle(.iconOnly)
+                                }
+                            }
+                        }.padding(12)
+                    }
+                }
             }
         }
         .task { branch = model.chapter.branch; expandedVolumes.insert(model.chapter.volume); await model.refreshBookmarks() }
@@ -197,7 +238,8 @@ struct ReaderMorePanel: View {
     @State private var savedDefault = false
 
     static let actions: [(String, String, String)] = [
-        ("chapters", "章节与页面", "list.bullet"), ("bookmark", "添加书签", "bookmark"),
+        ("chapters", "章节列表", "list.bullet"), ("thumbnails", "缩略图", "square.grid.2x2"),
+        ("bookmark", "添加书签", "bookmark"),
         ("save", "保存页面", "square.and.arrow.down"), ("crop", "裁切批注", "crop"),
         ("auto", "自动翻页", "play.circle"), ("direction", "切换方向", "arrow.left.arrow.right"),
         ("download", "下载本章", "arrow.down.circle"), ("browser", "浏览器打开", "safari"),

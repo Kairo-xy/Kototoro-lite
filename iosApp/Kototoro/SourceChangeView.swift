@@ -1,7 +1,7 @@
 import KototoroShared
 import SwiftUI
 
-/// Source selection and paged search reuse the installed catalog and its existing runtime.
+/// Source selection and multi-source parallel search reuse the global search pipeline.
 struct SourceChangeView: View {
     @EnvironmentObject private var sources: SourcesModel
     @Environment(\.dismiss) private var dismiss
@@ -10,114 +10,189 @@ struct SourceChangeView: View {
     let content: IosSourceContent
     let onChanged: (IosSourceContent) -> Void
 
-    @State private var sourceQuery = ""
+    @StateObject private var searchModel = GlobalSearchModel()
+    @State private var query: String
+    @State private var selectedSources: Set<String> = []
+    @State private var showingSourceFilter = false
 
-    private var targets: [IosSource] {
-        let base = sources.ordered(sources.sources.filter {
+    init(runtime: IosSources, content: IosSourceContent, onChanged: @escaping (IosSourceContent) -> Void) {
+        self.runtime = runtime
+        self.content = content
+        self.onChanged = onChanged
+        _query = State(initialValue: content.title)
+    }
+
+    private var candidateSources: [IosSource] {
+        sources.ordered(sources.sources.filter {
             $0.name != content.sourceName && $0.mediaKind == content.mediaKind && $0.ecosystem != "LOCAL" &&
                 sources.isEnabled($0) && (showAdult || !$0.isAdult || content.contentType.hasPrefix("HENTAI_"))
         })
-        let query = sourceQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return base }
-        return base.filter {
-            $0.title.localizedCaseInsensitiveContains(query) ||
-            $0.locale.localizedCaseInsensitiveContains(query) ||
-            $0.name.localizedCaseInsensitiveContains(query)
+    }
+
+    private var activeSources: [IosSource] {
+        if selectedSources.isEmpty {
+            return candidateSources
         }
+        return candidateSources.filter { selectedSources.contains($0.name) }
     }
 
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    Text(content.title).font(.headline)
-                    Text("选择其他来源，搜索并确认同一部作品。")
-                        .font(.footnote).foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(content.title).font(.headline)
+                        Text("在 \(activeSources.count) 个来源中检索可替换的作品")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
-                Section("选择来源") {
-                    ForEach(targets, id: \.name) { source in
-                        NavigationLink {
-                            SourceChangeSearchView(runtime: runtime, source: source, original: content, onChanged: onChanged)
-                        } label: {
-                            HStack {
-                                SourceIcon(runtime: runtime, source: source, size: 32)
-                                VStack(alignment: .leading) {
-                                    Text(source.title)
-                                    Text(source.locale).font(.caption).foregroundStyle(.secondary)
+
+                if searchModel.isSearching {
+                    Section {
+                        HStack(spacing: 12) {
+                            ProgressView()
+                            Text("正在换源搜索 (\(searchModel.completed)/\(activeSources.count))…")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
+                let successfulRows = searchModel.rows.filter { row in
+                    if case .done(let items) = row.status, !items.isEmpty { return true }
+                    return false
+                }
+
+                if !successfulRows.isEmpty {
+                    ForEach(successfulRows) { row in
+                        if case .done(let items) = row.status {
+                            Section(row.source.title) {
+                                ForEach(items.filter { $0.mediaKind == content.mediaKind && $0.sourceName != content.sourceName }, id: \.id) { item in
+                                    NavigationLink {
+                                        SourceChangeConfirmView(runtime: runtime, original: content, target: item, onChanged: onChanged)
+                                    } label: {
+                                        HStack(alignment: .top, spacing: 12) {
+                                            CoverImage(runtime: runtime, content: item)
+                                                .frame(width: 48, height: 72)
+                                                .clipShape(RoundedRectangle(cornerRadius: 6))
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Text(item.title).font(.headline).lineLimit(2)
+                                                if !item.authors.isEmpty {
+                                                    Text(item.authors.joined(separator: "、"))
+                                                        .font(.caption).foregroundStyle(.secondary)
+                                                }
+                                                HStack(spacing: 6) {
+                                                    Text(row.source.title)
+                                                        .font(.caption2)
+                                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                                        .background(Color(.tertiarySystemFill), in: Capsule())
+                                                }
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
-                        .accessibilityIdentifier("sourceChange.source.\(source.name)")
                     }
-                    if targets.isEmpty {
-                        Text(sources.sources.isEmpty ? "没有其他已启用的同类型来源。请先在浏览页安装或启用来源。" : "未找到匹配的来源。")
-                            .foregroundStyle(.secondary).accessibilityIdentifier("sourceChange.empty")
+                } else if !searchModel.isSearching && searchModel.completed > 0 {
+                    Section {
+                        Text("未在所选来源中找到相关作品，请尝试调整搜索关键词。")
+                            .foregroundStyle(.secondary)
                     }
                 }
             }
-            .searchable(text: $sourceQuery, prompt: "搜索来源")
+            .searchable(text: $query, prompt: "搜索替换作品")
+            .onSubmit(of: .search) { triggerSearch(force: true) }
             .navigationTitle("换源")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }.accessibilityIdentifier("sourceChange.cancel")
+                    Button("取消") { dismiss() }
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingSourceFilter = true
+                    } label: {
+                        Label("筛选源", systemImage: selectedSources.isEmpty ? "line.3.horizontal.decrease.circle" : "line.3.horizontal.decrease.circle.fill")
+                    }
+                }
+            }
+            .sheet(isPresented: $showingSourceFilter) {
+                SourceMultiSelectSheet(
+                    sources: candidateSources,
+                    selected: $selectedSources,
+                    onApplied: { triggerSearch(force: true) }
+                )
+            }
+            .task {
+                triggerSearch(force: false)
             }
         }
     }
+
+    private func triggerSearch(force: Bool = false) {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, !activeSources.isEmpty else { return }
+        if !force && searchModel.submitted == text && !searchModel.rows.isEmpty {
+            return
+        }
+        searchModel.search(text, sources: activeSources, runtime: runtime)
+    }
 }
 
-private struct SourceChangeSearchView: View {
-    @StateObject private var model: SourceBrowseModel
-    let original: IosSourceContent
-    let onChanged: (IosSourceContent) -> Void
-
-    init(runtime: IosSources, source: IosSource, original: IosSourceContent,
-         onChanged: @escaping (IosSourceContent) -> Void) {
-        _model = StateObject(wrappedValue: SourceBrowseModel(runtime: runtime, source: source, initialQuery: original.title))
-        self.original = original
-        self.onChanged = onChanged
-    }
+private struct SourceMultiSelectSheet: View {
+    let sources: [IosSource]
+    @Binding var selected: Set<String>
+    let onApplied: () -> Void
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        List {
-            ForEach(model.items.filter { $0.mediaKind == original.mediaKind && $0.sourceName != original.sourceName },
-                    id: \.id) { item in
-                NavigationLink {
-                    SourceChangeConfirmView(runtime: model.runtime, original: original, target: item, onChanged: onChanged)
-                } label: {
-                    HStack(alignment: .top) {
-                        CoverImage(runtime: model.runtime, content: item).frame(width: 48, height: 72).clipped()
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(item.title).font(.headline)
-                            if !item.authors.isEmpty {
-                                Text(item.authors.joined(separator: "、")).font(.caption).foregroundStyle(.secondary)
+        NavigationStack {
+            List {
+                Section {
+                    Button(selected.isEmpty || selected.count < sources.count ? "全选全部来源" : "清除选择（默认全部）") {
+                        if selected.count == sources.count {
+                            selected.removeAll()
+                        } else {
+                            selected = Set(sources.map(\.name))
+                        }
+                    }
+                }
+                Section("可选来源 (\(sources.count))") {
+                    ForEach(sources, id: \.name) { source in
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(source.title)
+                                Text(source.locale).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if selected.contains(source.name) || selected.isEmpty {
+                                Image(systemName: "checkmark").foregroundColor(.accentColor)
+                            }
+                        }
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            if selected.isEmpty {
+                                selected = Set(sources.map(\.name))
+                            }
+                            if selected.contains(source.name) {
+                                selected.remove(source.name)
+                            } else {
+                                selected.insert(source.name)
                             }
                         }
                     }
                 }
-                .accessibilityIdentifier("sourceChange.result.\(item.id)")
-                .onAppear {
-                    if item.id == model.items.last?.id, model.error == nil { Task { await model.loadMore() } }
-                }
             }
-            if model.isLoading { ProgressView("正在搜索…") }
-            if let error = model.error {
-                Text(error).foregroundStyle(.red).accessibilityIdentifier("sourceChange.searchError")
-                if let challenge = model.challenge {
-                    ChallengeVerifyButton(challenge: challenge, runtime: model.runtime, sourceName: model.source.name) {
-                        await model.loadMore()
+            .navigationTitle("选择检索源")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("完成") {
+                        dismiss()
+                        onApplied()
                     }
                 }
-                Button("重试") { Task { await model.loadMore() } }.disabled(model.isLoading)
-            } else if !model.isLoading, model.items.isEmpty {
-                Text("没有找到作品，请调整搜索词后重试。")
-                    .foregroundStyle(.secondary).accessibilityIdentifier("sourceChange.noResults")
             }
         }
-        .navigationTitle(model.source.title)
-        .searchable(text: $model.query, prompt: "搜索目标作品")
-        .onSubmit(of: .search) { Task { await model.submitSearch() } }
-        .task { await model.loadMore() }
     }
 }
 

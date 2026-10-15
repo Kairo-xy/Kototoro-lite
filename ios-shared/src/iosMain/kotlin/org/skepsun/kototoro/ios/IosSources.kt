@@ -654,6 +654,16 @@ class IosSources(
     suspend fun homepage(sourceName: String): String? = try { descriptor(sourceName).homepage } catch (
         error: kotlin.coroutines.cancellation.CancellationException) { throw error } catch (_: Exception) { null }
 
+    /** Related or recommended works for the content, as provided by the underlying source. */
+    @Throws(Exception::class)
+    suspend fun related(content: IosSourceContent): List<IosSourceContent> = try {
+        runtime.getRelated(content.value).map(::IosSourceContent)
+    } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        emptyList()
+    }
+
     private suspend fun descriptor(sourceName: String): SourceDescriptor =
         descriptorsMutex.withLock { descriptors[sourceName] } ?: runtime.describe(sourceName).also { described ->
             descriptorsMutex.withLock { descriptors[sourceName] = described }

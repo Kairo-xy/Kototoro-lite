@@ -79,11 +79,17 @@ struct SourceSettingsView: View {
     private var preferenceSections: some View {
         if let screen {
             let rows = screen.nodes.filter { $0.kind != "GROUP" }
+            let groups = screen.nodes.filter { $0.kind == "GROUP" }
             if !rows.isEmpty {
                 Section("设置") { ForEach(rows, id: \.id) { row($0) } }
             }
-            ForEach(screen.nodes.filter { $0.kind == "GROUP" }, id: \.id) { group in
+            ForEach(groups, id: \.id) { group in
                 Section(group.title) { ForEach(group.children, id: \.id) { row($0) } }
+            }
+            if rows.isEmpty && groups.isEmpty {
+                Section {
+                    Text("此来源没有可调整的设置。").foregroundStyle(.secondary)
+                }
             }
         } else if unsupported {
             Section {

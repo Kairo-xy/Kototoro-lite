@@ -94,7 +94,7 @@ struct ContentView: View {
         .tabViewSearchActivation(.searchTabSelection)
         .tabBarMinimizeBehavior(.onScrollDown)
         .continueReadingAccessory(
-            enabled: !ReaderPresence.shared.isReading &&
+            enabled: !ReaderPresence.shared.shouldSuppressAccessory &&
                 ContentSpace.latest(in: library.history, enabled: spacesEnabled, space: space) != nil
         )
         .continueReadingPresentation(opened: $resumed)

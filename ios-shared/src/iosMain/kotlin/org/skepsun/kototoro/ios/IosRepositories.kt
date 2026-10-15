@@ -28,11 +28,20 @@ class IosRepositoryCatalog internal constructor(
 class IosRepositories(private val library: IosLibrary) {
     /** Repositories saved before names were derived like Android's show "owner/repo" instead of the folder name. */
     @Throws(Exception::class)
-    suspend fun saved(): List<IosRepository> = library.database.getExternalExtensionRepoDao().getAll()
-        .filter { it.type.name in supported }.map {
-            val title = if (it.name.isBlank() || it.name == "repo") repositoryName(it.baseUrl) else it.name
-            IosRepository(it.type.name, it.baseUrl, title, it.signingKeyFingerprint)
+    suspend fun saved(): List<IosRepository> {
+        val all = library.database.getExternalExtensionRepoDao().getAll()
+            .filter { it.type.name in supported }
+        val seen = mutableSetOf<Pair<String, String>>()
+        val result = mutableListOf<IosRepository>()
+        for (entity in all) {
+            val norm = normalizeRepoUrl(entity.baseUrl)
+            if (seen.add(entity.type.name to norm)) {
+                val title = if (entity.name.isBlank() || entity.name == "repo") repositoryName(entity.baseUrl) else entity.name
+                result.add(IosRepository(entity.type.name, entity.baseUrl, title, entity.signingKeyFingerprint))
+            }
         }
+        return result
+    }
 
     @Throws(Exception::class)
     fun decode(bytes: ByteArray, protobuf: Boolean, url: String, kind: String): IosRepositoryCatalog {
@@ -42,8 +51,10 @@ class IosRepositories(private val library: IosLibrary) {
         val index = if (legacy) decodeLegacyExtensionIndex(payload, repositoryName(url))
             else decodeExtensionStoreIndex(payload, protobuf)
         require(index.name.isNotBlank())
-        return IosRepositoryCatalog(url, kind, index.name, index.signingKey, index.extensionListUrl,
-            index.contact.website, index.extensionList?.extensions.orEmpty())
+        val norm = normalizeRepoUrl(url)
+        return IosRepositoryCatalog(norm, kind, index.name, index.signingKey, index.extensionListUrl,
+            index.contact.website, index.extensionList?.extensions.orEmpty(),
+            if (norm.endsWith('/')) norm else "$norm/")
     }
 
     @Throws(Exception::class)
@@ -63,7 +74,8 @@ class IosRepositories(private val library: IosLibrary) {
             }
             fromIndex?.extensionList?.extensions ?: decodeExtensionStoreList(payload, protobuf).extensions
         }
-        return IosRepositoryCatalog(catalog.url, catalog.kind, catalog.title, signingKey, null, catalog.website,
+        val norm = normalizeRepoUrl(catalog.url)
+        return IosRepositoryCatalog(norm, catalog.kind, catalog.title, signingKey, null, catalog.website,
             rows, url)
     }
 
@@ -82,32 +94,64 @@ class IosRepositories(private val library: IosLibrary) {
                 ExtensionStoreIndex.ContentWarning.UNSPECIFIED, emptyList())
         }
         require(rows.isNotEmpty()) { "此 GitHub 发布没有 JAR 插件" }
-        return IosRepositoryCatalog(url, "JAR", root["name"]?.jsonPrimitive?.contentOrNull?.ifBlank { null } ?: version,
-            "", null, url, rows)
+        val norm = normalizeRepoUrl(url)
+        return IosRepositoryCatalog(norm, "JAR", root["name"]?.jsonPrimitive?.contentOrNull?.ifBlank { null } ?: version,
+            "", null, norm, rows, if (norm.endsWith('/')) norm else "$norm/")
     }
 
     @Throws(Exception::class)
     suspend fun save(catalog: IosRepositoryCatalog, fingerprint: String) {
+        val normalizedUrl = normalizeRepoUrl(catalog.url)
         require(fingerprint.matches(Regex("[a-f0-9]{64}")))
         require(catalog.extensions.size <= 20000 && catalog.extensions.map { it.id }.distinct().size == catalog.extensions.size)
         val type = ExternalExtensionType.valueOf(catalog.kind)
         val dao = library.database.getExternalExtensionRepoDao()
-        val previous = dao.get(type, catalog.url)
-        require(previous == null || previous.signingKeyFingerprint == fingerprint) { "仓库签名信息已变化，请核对地址" }
+        val previous = dao.get(type, normalizedUrl) ?: dao.get(type, catalog.url)
+        val isLegacyPseudoFingerprint = previous != null && (
+            previous.signingKeyFingerprint.length != 64 ||
+            previous.signingKeyFingerprint == normalizedUrl.hashCode().toString(16) ||
+            previous.signingKeyFingerprint == catalog.url.hashCode().toString(16) ||
+            type == ExternalExtensionType.JAR
+        )
+        require(previous == null || isLegacyPseudoFingerprint || previous.signingKeyFingerprint == fingerprint) {
+            "仓库签名信息已变化，请核对地址"
+        }
         val duplicate = dao.getByFingerprint(type, fingerprint)
-        require(duplicate == null || duplicate.baseUrl == catalog.url) { "此仓库已从其他地址添加" }
+        require(duplicate == null || duplicate.baseUrl == normalizedUrl || duplicate.baseUrl == catalog.url) { "此仓库已从其他地址添加" }
         val time = kotlin.time.Clock.System.now().toEpochMilliseconds()
-        dao.upsert(ExternalExtensionRepoEntity(type, catalog.url, catalog.title, null, catalog.website, fingerprint,
+        if (previous != null && previous.baseUrl != normalizedUrl) {
+            dao.delete(type, previous.baseUrl)
+        }
+        dao.upsert(ExternalExtensionRepoEntity(type, normalizedUrl, catalog.title, null, catalog.website, fingerprint,
             previous?.createdAt ?: time, time, time, null, null))
     }
 
     @Throws(Exception::class)
     suspend fun remove(repository: IosRepository) {
-        library.database.getExternalExtensionRepoDao().delete(ExternalExtensionType.valueOf(repository.kind), repository.url)
+        val dao = library.database.getExternalExtensionRepoDao()
+        val type = ExternalExtensionType.valueOf(repository.kind)
+        dao.delete(type, repository.url)
+        val normalized = normalizeRepoUrl(repository.url)
+        if (normalized != repository.url) {
+            dao.delete(type, normalized)
+        }
     }
 
     internal companion object {
         private val supported = setOf("MIHON", "ANIYOMI", "TSUNDOKU", "JAR")
+
+        internal fun normalizeRepoUrl(url: String): String {
+            var clean = url.trim()
+            for (suffix in listOf("/index.min.json", "/index.json", "/index.pb", "/repo.json")) {
+                if (clean.endsWith(suffix, ignoreCase = true)) {
+                    clean = clean.dropLast(suffix.length)
+                }
+            }
+            while (clean.endsWith('/') && clean.length > 8) {
+                clean = clean.dropLast(1)
+            }
+            return clean
+        }
 
         /**
          * Android's `deriveRepoName`: GitHub-hosted indexes (raw.githubusercontent.com / github.com) are named

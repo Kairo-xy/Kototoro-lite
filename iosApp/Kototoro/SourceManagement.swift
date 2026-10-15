@@ -339,30 +339,44 @@ struct SourceTile: View {
     @EnvironmentObject private var sources: SourcesModel
 
     var body: some View {
-        VStack(spacing: 6) {
-            SourceIcon(runtime: sources.runtime, source: source, size: 48)
+        VStack(spacing: 4) {
+            ZStack(alignment: .topTrailing) {
+                SourceIcon(runtime: sources.runtime, source: source, size: 40)
+                if sources.isNewSource(source) {
+                    SourceNewBadge()
+                        .offset(x: 10, y: -4)
+                }
+            }
+            .padding(.top, 2)
+
             Text(source.title)
                 .font(.caption.weight(.medium))
-                .lineLimit(2, reservesSpace: true)
+                .lineLimit(1)
                 .multilineTextAlignment(.center)
+                .padding(.horizontal, 2)
+
             Text(source.kind == "video" ? "影视" : SourceLanguage.title(source.locale))
-                .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-            if sources.isNewSource(source) { SourceNewBadge() }
+                .font(.system(size: 10))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 1)
+                .background(Color(.tertiarySystemFill), in: Capsule())
         }
         .frame(maxWidth: .infinity)
-        .padding(.vertical, 12).padding(.horizontal, 6)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .padding(.vertical, 8).padding(.horizontal, 6)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
 }
 
 struct SourceNewBadge: View {
     var body: some View {
         Text("新")
-            .font(.caption2.weight(.semibold))
-            .foregroundStyle(.tint)
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(Color.accentColor.opacity(0.12), in: Capsule())
+            .font(.system(size: 9, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(.horizontal, 4).padding(.vertical, 1)
+            .background(Color.red, in: Capsule())
             .accessibilityLabel("本版本新来源")
     }
 }

@@ -362,16 +362,10 @@ struct SourcesView: View {
             // The system search field under the title; the search tab stays the app-wide search.
             .pageSearch(text: $query, prompt: "搜索源")
             .toolbar {
-                // Leading on this root page, so the trailing group keeps room for the space and display menus.
-                ToolbarItemGroup(placement: .topBarLeading) {
+                ToolbarItemGroup(placement: .topBarTrailing) {
                     NavigationLink { RepositoriesView() } label: {
                         Label("仓库与扩展", systemImage: "shippingbox")
                     }.accessibilityIdentifier("sources.repositories")
-                    Button { openGlobalSearch() } label: { Image(systemName: "globe") }
-                        .accessibilityLabel("搜索全部来源")
-                        .accessibilityIdentifier("sources.globalSearch")
-                }
-                ToolbarItemGroup(placement: .topBarTrailing) {
                     if spacesEnabled { SpaceMenu() }
                     displayMenu
                 }

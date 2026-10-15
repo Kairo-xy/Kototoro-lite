@@ -99,13 +99,17 @@ private struct ContinueReadingPresentation: ViewModifier {
 final class ReaderPresence {
     static let shared = ReaderPresence()
     private(set) var visibleReaders = 0
+    private(set) var visibleDetails = 0
     private var protectedDirectories: [UUID: Set<String>] = [:]
     var isReading: Bool { visibleReaders > 0 }
+    var shouldSuppressAccessory: Bool { visibleReaders > 0 || visibleDetails > 0 }
     func appear() { visibleReaders += 1 }
     func disappear() {
         visibleReaders = max(0, visibleReaders - 1)
         Task { await ReaderStorageAccess.shared.requestIdleAction() }
     }
+    func detailAppear() { visibleDetails += 1 }
+    func detailDisappear() { visibleDetails = max(0, visibleDetails - 1) }
     func protect(_ directories: Set<String>, owner: UUID) { protectedDirectories[owner] = directories }
     func release(_ owner: UUID) { protectedDirectories[owner] = nil }
     func protects(_ directory: String) -> Bool { protectedDirectories.values.contains { $0.contains(directory) } }
@@ -143,9 +147,17 @@ private struct ContinueReadingAccessoryModifier: ViewModifier {
     let enabled: Bool
     func body(content: Content) -> some View {
         if #available(iOS 26.1, *) {
-            content.tabViewBottomAccessory(isEnabled: enabled) { ContinueReadingAccessory() }
+            content.tabViewBottomAccessory(isEnabled: enabled) {
+                if enabled {
+                    ContinueReadingAccessory()
+                }
+            }
         } else {
-            content.tabViewBottomAccessory { ContinueReadingAccessory() }
+            content.tabViewBottomAccessory {
+                if enabled {
+                    ContinueReadingAccessory()
+                }
+            }
         }
     }
 }

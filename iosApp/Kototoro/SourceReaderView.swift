@@ -123,8 +123,11 @@ final class SourceReaderModel: ObservableObject {
     var nextChapter: IosSourceChapter? { content.adjacentChapter(chapter: chapter, forward: true) }
     var isBookmarked: Bool { bookmarks.contains { $0.chapterId == chapter.id && Int($0.index) == index } }
 
-    init(runtime: IosSources, content: IosSourceContent, chapter: IosSourceChapter) {
+    private var initialPage: Int?
+
+    init(runtime: IosSources, content: IosSourceContent, chapter: IosSourceChapter, initialPage: Int? = nil) {
         self.runtime = runtime; self.content = content; self.chapter = chapter
+        self.initialPage = initialPage
         chapterByID = Dictionary(content.chapters.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
@@ -195,6 +198,10 @@ final class SourceReaderModel: ObservableObject {
             savedPosition = saved
             if startAtEnd {
                 index = max(0, pages.count - 1); offset = 0
+            } else if let page = initialPage {
+                index = min(max(0, page), max(0, pages.count - 1))
+                offset = 0
+                self.initialPage = nil
             } else if !ignoresSavedPosition, let savedPosition, savedPosition.chapterId == selected.id {
                 index = min(max(0, Int(savedPosition.index)), max(0, pages.count - 1))
                 offset = savedPosition.scroll
@@ -698,8 +705,9 @@ final class SourceReaderModel: ObservableObject {
         slotIndex = next; selectSlot(next)
     }
 
-    func moveChapter(_ target: IosSourceChapter, atEnd: Bool = false) async {
+    func moveChapter(_ target: IosSourceChapter, atEnd: Bool = false, initialPage: Int? = nil) async {
         guard !isLoadingPages else { return }
+        self.initialPage = initialPage
         let token = request
         isLoadingPages = true; error = nil; challenge = nil; failedChapter = nil
         defer {
@@ -875,8 +883,8 @@ struct SourceReaderView: View {
         return downloadEntry?.status
     }
 
-    init(runtime: IosSources, content: IosSourceContent, chapter: IosSourceChapter) {
-        _model = StateObject(wrappedValue: SourceReaderModel(runtime: runtime, content: content, chapter: chapter))
+    init(runtime: IosSources, content: IosSourceContent, chapter: IosSourceChapter, initialPage: Int? = nil) {
+        _model = StateObject(wrappedValue: SourceReaderModel(runtime: runtime, content: content, chapter: chapter, initialPage: initialPage))
         _settings = StateObject(wrappedValue: ReaderSettings(contentID: content.id))
     }
 
@@ -1304,20 +1312,35 @@ struct SourceReaderView: View {
         if let panel {
             VStack(spacing: 0) {
                 HStack {
-                    Text(panel == .chapters ? model.chapter.title : "更多").font(.headline).lineLimit(1)
+                    Text(panel == .more ? "更多" : (panel == .thumbnails ? "缩略图" : model.chapter.title)).font(.headline).lineLimit(1)
                     Spacer()
                     Button("收起", systemImage: "xmark") { withAnimation(chromeAnimation) { self.panel = nil } }
                         .labelStyle(.iconOnly).buttonStyle(.borderless).accessibilityIdentifier("reader.panel.close")
                 }.padding(16)
                 Divider()
-                if panel == .chapters {
-                    ReaderChapterPanel(model: model, onJump: { page in model.jump(to: page); closePanel() },
-                                       onChapter: { chapter in Task {
-                                           await model.moveChapter(chapter); closePanel()
-                                       } },
-                                       onBookmark: { bookmark in Task {
-                                           if await model.openBookmark(bookmark) { closePanel() }
-                                       } })
+                if panel == .chapters || panel == .thumbnails {
+                    ReaderChapterPanel(
+                        model: model,
+                        initialTab: panel == .thumbnails ? 1 : 0,
+                        onJump: { page in model.jump(to: page); closePanel() },
+                        onChapter: { chapter in Task {
+                            await model.moveChapter(chapter); closePanel()
+                        } },
+                        onBookmark: { bookmark in Task {
+                            if await model.openBookmark(bookmark) { closePanel() }
+                        } },
+                        onSelectPage: { chapter, page in
+                            if chapter.id == model.chapter.id {
+                                model.jump(to: page)
+                                closePanel()
+                            } else {
+                                Task {
+                                    await model.moveChapter(chapter, initialPage: page)
+                                    closePanel()
+                                }
+                            }
+                        }
+                    )
                 } else {
                     ReaderMorePanel(settings: settings, autoScroll: $model.autoScroll,
                                     isBookmarked: model.isBookmarked,
@@ -1327,12 +1350,12 @@ struct SourceReaderView: View {
             }
             .frame(maxHeight: 540)
             .glassEffect(.regular, in: .rect(cornerRadius: 28))
-            .glassEffectID(panel == .chapters ? "chapters" : "more", in: chrome)
+            .glassEffectID(panel == .more ? "more" : (panel == .thumbnails ? "thumbnails" : "chapters"), in: chrome)
             .glassEffectTransition(.matchedGeometry)
             // Grow out of the control that opened the panel: the centred chapter capsule or the trailing more button.
             .transition(.opacity.combined(with: .scale(scale: 0.96, anchor: panelAnchor(panel))))
             .accessibilityElement(children: .contain)
-            .accessibilityIdentifier(panel == .chapters ? "reader.chapterPanel" : "reader.morePanel")
+            .accessibilityIdentifier(panel == .more ? "reader.morePanel" : (panel == .thumbnails ? "reader.thumbnailsPanel" : "reader.chapterPanel"))
         } else {
             HStack {
                 Button("返回", systemImage: "chevron.left") { dismiss() }
@@ -1503,6 +1526,7 @@ struct SourceReaderView: View {
     private func moreAction(_ action: String) {
         switch action {
         case "chapters": withAnimation(chromeAnimation) { panel = .chapters }
+        case "thumbnails": withAnimation(chromeAnimation) { panel = .thumbnails }
         case "bookmark": Task { await model.toggleBookmark() }
         case "save": if let image = model.image { closePanel(); save(image) }
         case "crop": if model.image != nil { closePanel(); cropping = true }
@@ -1520,7 +1544,7 @@ struct SourceReaderView: View {
     }
 }
 
-enum ReaderPanel { case chapters, more }
+enum ReaderPanel: Equatable { case chapters, thumbnails, more }
 
 private final class ReaderScrollTracker {
     var offset = CGPoint.zero

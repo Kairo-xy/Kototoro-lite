@@ -23,7 +23,7 @@ final class GlobalSearchModel: ObservableObject {
     @Published private(set) var isSearching = false
     @Published private(set) var submitted = ""
     private var task: Task<Void, Never>?
-    private static let parallelism = 4
+    private static let parallelism = 6
 
     func search(_ query: String, sources: [IosSource], runtime: IosSources) {
         task?.cancel()

@@ -37,11 +37,44 @@ final class SourceDetailsModel: ObservableObject {
     @Published private(set) var challenge: IosChallenge?
     @Published private(set) var isLoading = false
     @Published var selectedLine: String?
+    @Published private(set) var related: [IosSourceContent] = []
     let runtime: IosSources
     @Published private(set) var content: IosSourceContent
     private var detailsRequest: UUID?
     /// The shown details came from the source in this screen, not from the cache or the saved record.
     private var fetched = false
+
+    func loadRelated() async {
+        guard related.isEmpty else { return }
+        let current = details ?? content
+        if let list = try? await runtime.related(content: current), !list.isEmpty {
+            let filtered = list.filter { $0.id != current.id && $0.url != current.url }
+            if !filtered.isEmpty {
+                related = filtered
+                return
+            }
+        }
+        // Fallback: search works by the same author in the same source
+        if let author = current.authors.first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            if let list = try? await runtime.page(sourceName: current.sourceName, page: 1, loadedCount: 0, query: author, tag: nil) {
+                let filtered = list.filter { $0.id != current.id && $0.url != current.url }
+                if !filtered.isEmpty {
+                    related = filtered
+                    return
+                }
+            }
+        }
+        // Fallback: search works with the primary tag in the same source
+        if let tag = current.tags.first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
+            if let list = try? await runtime.page(sourceName: current.sourceName, page: 1, loadedCount: 0, query: tag, tag: nil) {
+                let filtered = list.filter { $0.id != current.id && $0.url != current.url }
+                if !filtered.isEmpty {
+                    related = filtered
+                    return
+                }
+            }
+        }
+    }
 
     init(runtime: IosSources, content: IosSourceContent) {
         self.runtime = runtime
@@ -124,8 +157,10 @@ final class SourceDetailsModel: ObservableObject {
         guard details == nil else { return }
         if let cached = DetailsCache.get(content) ?? (content.chapterCount > 0 ? content : nil) {
             apply(cached)
+            Task { await loadRelated() }
         } else if let library, let saved = try? await library.storedDetails(content: content), details == nil {
             apply(saved)
+            Task { await loadRelated() }
         }
     }
 
@@ -150,6 +185,7 @@ final class SourceDetailsModel: ObservableObject {
                 apply(result)
                 fetched = true
                 DetailsCache.put(result)
+                await loadRelated()
             }
         } catch {
             // A shown cached or saved list stays (offline reading); the error offers a retry above it.
@@ -164,13 +200,29 @@ struct SourceDetailsView: View {
     @StateObject private var model: SourceDetailsModel
     @State private var playing: PlaybackRequest?
     @State private var reading: PlaybackRequest?
+    @State private var isTitleExpanded = false
     @State private var isSummaryExpanded = false
+    @State private var previewingCover = false
+    @State private var toastMessage: String?
+    @State private var destinationBrowse: IosSource?
+    @State private var destinationDetails: IosSourceContent?
+    @State private var browseInitialQuery: String?
+    @State private var destinationGlobalSearchQuery: String?
     @State private var isFavourite = false
+    @State private var savingFavourite = false
     @State private var recordError: String?
     @State private var resume: IosReadingPosition?
     @State private var editingCategories = false
     @State private var changingSource = false
-    @State private var savingFavourite = false
+    @State private var showingChaptersSheet = false
+    private enum DetailsTab: Int, CaseIterable {
+        case chapters = 0
+        case thumbnails = 1
+        case bookmarks = 2
+    }
+
+    @State private var selectedTab = DetailsTab.chapters
+    @State private var bookmarks: [IosBookmark] = []
     @State private var chapterQuery = ""
     @AppStorage("details.newestFirst") private var newestFirst = false
     /// "source" (default) or "number"; see SourceDetailsModel.orderByNumber.
@@ -178,6 +230,8 @@ struct SourceDetailsView: View {
     @AppStorage(PanoramaKeys.enabled) private var panorama = true
     @AppStorage(PanoramaKeys.layout) private var panoramaLayout = PanoramaLayout.top
     @State private var scrollOffset: CGFloat = 0
+    @State private var isDockCompact = false
+    @State private var dockDragOffset: CGFloat = 0
     /// Opened from "continue reading": go straight on with the chapter being read, once.
     private let autoResume: Bool
     @State private var resumed = false
@@ -217,21 +271,83 @@ struct SourceDetailsView: View {
                     Button("重试") { Task { await model.load() } }.disabled(model.isLoading)
                 }
             }
-            if let details = model.details {
-                if model.isVideo { episodes(details) } else { chapters(details) }
+            if model.details != nil {
+                relatedSection
             }
+            Section {
+                Spacer().frame(height: 70)
+            }
+            .listRowBackground(Color.clear)
+            .listRowSeparator(.hidden)
         }
         .listStyle(.insetGrouped)
         .listSectionSpacing(.compact)
         .scrollContentBackground(.hidden)
+        .toolbar(.hidden, for: .tabBar)
+        .onAppear {
+            ReaderPresence.shared.detailAppear()
+        }
+        .onDisappear {
+            ReaderPresence.shared.detailDisappear()
+        }
+        .onChange(of: selectedTab) { _, tab in
+            if tab == .bookmarks {
+                Task { await refreshBookmarks() }
+            }
+        }
+        .overlay(alignment: .bottom) {
+            floatingActionBar
+        }
+        .overlay(alignment: .top) {
+            if let toast = toastMessage {
+                Text(toast)
+                    .font(.subheadline.weight(.medium))
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 8)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .shadow(radius: 6)
+                    .padding(.top, 10)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                    .onAppear {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                            withAnimation { toastMessage = nil }
+                        }
+                    }
+            }
+        }
         .backgroundPreferenceValue(DetailsCoverBoundsKey.self) { bounds in
             GeometryReader { geometry in
                 backdrop(coverBottom: bounds.map { geometry[$0].maxY + scrollOffset })
             }
             .ignoresSafeArea()
         }
-        .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y + $0.contentInsets.top }) { _, offset in
-            scrollOffset = offset
+        .onScrollGeometryChange(for: CGFloat.self, of: { $0.contentOffset.y + $0.contentInsets.top }) { oldOffset, newOffset in
+            scrollOffset = newOffset
+            let delta = newOffset - oldOffset
+            guard abs(delta) > 0.5 else { return }
+
+            if newOffset <= 10 {
+                if isDockCompact {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        isDockCompact = false
+                    }
+                }
+                return
+            }
+
+            if delta > 0.5 {
+                if !isDockCompact {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        isDockCompact = true
+                    }
+                }
+            } else if delta < -0.5 {
+                if isDockCompact {
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                        isDockCompact = false
+                    }
+                }
+            }
         }
         // Over the panorama the bar stays clear; the title appears once the header has scrolled away.
         .navigationTitle(panorama && scrollOffset < 170 ? "" : model.content.title)
@@ -277,14 +393,31 @@ struct SourceDetailsView: View {
                 Task { await refreshRecords() }
             }
         }
+        .sheet(isPresented: $showingChaptersSheet) {
+            if let details = model.details ?? (model.content.chapterCount > 0 ? model.content : nil) {
+                chaptersSheet(details)
+            }
+        }
         .sheet(isPresented: $editingCategories, onDismiss: { Task { await refreshRecords() } }) {
             FavouriteCategoriesView(content: model.details ?? model.content)
+        }
+        .sheet(isPresented: $previewingCover) {
+            CoverPreviewSheet(runtime: model.runtime, content: model.details ?? model.content)
+        }
+        .navigationDestination(item: $destinationBrowse) { src in
+            SourceBrowseView(runtime: model.runtime, source: src, initialQuery: browseInitialQuery)
+        }
+        .navigationDestination(item: $destinationDetails) { target in
+            SourceDetailsView(runtime: model.runtime, content: target)
+        }
+        .navigationDestination(item: $destinationGlobalSearchQuery) { q in
+            GlobalSearchView(query: .constant(q))
         }
         .onChange(of: reading == nil) { _, closed in if closed { Task { await refreshRecords() } } }
         .navigationDestination(item: $reading) { request in
             Group {
                 if model.isNovel { NovelReaderView(runtime: model.runtime, content: request.content, chapter: request.chapter) }
-                else { SourceReaderView(runtime: model.runtime, content: request.content, chapter: request.chapter) }
+                else { SourceReaderView(runtime: model.runtime, content: request.content, chapter: request.chapter, initialPage: request.initialPage) }
             }
             .id(request.id)
         }
@@ -311,77 +444,323 @@ struct SourceDetailsView: View {
             try await database.saveDetails(content: content)
             isFavourite = try await database.isFavourite(content: content).boolValue
             resume = try await database.position(content: content)
+            bookmarks = try await database.bookmarks(content: content)
             // Open the chapter list on the branch being read.
             if let chapter = resumeChapter(), model.branches.contains(chapter.branch) { model.selectedBranch = chapter.branch }
         } catch { recordError = error.localizedDescription }
     }
 
+    private func refreshBookmarks() async {
+        guard let content = model.details ?? model.content as IosSourceContent?, let database = library.library else { return }
+        bookmarks = (try? await database.bookmarks(content: content)) ?? []
+    }
+
     private var header: some View {
         let shown = model.details ?? model.content
         return Section {
-            VStack(alignment: .leading, spacing: 16) {
-                HStack(alignment: .top, spacing: 16) {
-                    CoverImage(runtime: model.runtime, content: shown)
-                        .frame(width: 118, height: 177)
-                        .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .shadow(color: .black.opacity(0.25), radius: 10, y: 4)
-                        .accessibilityLabel("封面")
-                        .accessibilityIdentifier("details.cover")
-                        .anchorPreference(key: DetailsCoverBoundsKey.self, value: .bounds) { $0 }
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(shown.title).font(.title3.weight(.bold)).lineLimit(4)
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier("details.title")
-                        if let alt = shown.altTitles.first {
-                            Text(alt).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+            VStack(alignment: .leading, spacing: 14) {
+                coverRow(shown)
+                infoCard(shown)
+                summaryCard(shown)
+            }
+            .padding(.vertical, 6)
+            .listRowBackground(Color.clear)
+            .listRowInsets(EdgeInsets(top: 8, leading: 16, bottom: 8, trailing: 16))
+        }
+        .listRowSeparator(.hidden)
+    }
+
+    private func coverRow(_ shown: IosSourceContent) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            CoverImage(runtime: model.runtime, content: shown)
+                .frame(width: 112, height: 168)
+                .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5)
+                )
+                .shadow(color: .black.opacity(0.22), radius: 8, y: 3)
+                .accessibilityLabel("封面")
+                .accessibilityIdentifier("details.cover")
+                .anchorPreference(key: DetailsCoverBoundsKey.self, value: .bounds) { $0 }
+                .onTapGesture { previewingCover = true }
+
+            VStack(alignment: .leading, spacing: 8) {
+                Text(shown.title)
+                    .font(.title3.weight(.bold))
+                    .lineSpacing(2)
+                    .lineLimit(isTitleExpanded ? nil : 3)
+                    .textSelection(.enabled)
+                    .onTapGesture { withAnimation { isTitleExpanded.toggle() } }
+                    .accessibilityIdentifier("details.title")
+
+                if let alt = shown.altTitles.first, !alt.isEmpty {
+                    Text(alt)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(isTitleExpanded ? nil : 2)
+                }
+
+                if let src = sources.sources.first(where: { $0.name == shown.sourceName }) {
+                    Button {
+                        browseInitialQuery = nil
+                        destinationBrowse = src
+                    } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: "globe")
+                                .font(.caption2)
+                            Text(src.title)
+                                .font(.caption.weight(.medium))
+                            Image(systemName: "chevron.right")
+                                .font(.system(size: 8, weight: .bold))
                         }
-                        if !shown.authors.isEmpty {
-                            Label(shown.authors.joined(separator: "、"), systemImage: "person")
-                                .font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+                        .padding(.horizontal, 9)
+                        .padding(.vertical, 4)
+                        .background(Color(.secondarySystemFill), in: .capsule)
+                        .foregroundStyle(.primary)
+                    }
+                    .buttonStyle(.plain)
+                }
+
+                // Quick Action Buttons Row (Copy, Favorite, Rating) snug below the source button
+                HStack(spacing: 8) {
+                    Button {
+                        UIPasteboard.general.string = shown.title
+                        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                        toastMessage = "已复制标题"
+                    } label: {
+                        Image(systemName: "doc.on.doc")
+                            .font(.system(size: 14, weight: .medium))
+                            .frame(width: 36, height: 36)
+                            .background(Color(.secondarySystemFill), in: .circle)
+                            .foregroundStyle(.primary)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("复制标题")
+
+                    Button {
+                        if isFavourite {
+                            removeFavourite()
+                        } else {
+                            editingCategories = true
                         }
-                        Label(sources.sources.first { $0.name == shown.sourceName }?.title ?? shown.sourceName, systemImage: "globe").font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                        HStack(spacing: 6) {
-                            if let state = shown.state { pill(Self.stateTitle(state), tint: Self.stateTint(state)) }
-                            if shown.rating > 0 {
-                                pill(String(format: "★ %.1f", Double(shown.rating) * 5), tint: .orange)
-                            }
-                            if model.details != nil {
-                                // Video lines repeat the same episodes; count the shown line only.
-                                let count = model.isVideo ? model.visibleChapters.count : model.chapters.count
-                                pill(model.isVideo ? "\(count) 集" : "\(count) 章", tint: .secondary)
-                            }
+                    } label: {
+                        Image(systemName: isFavourite ? "heart.fill" : "heart")
+                            .font(.system(size: 15, weight: .medium))
+                            .frame(width: 36, height: 36)
+                            .background(isFavourite ? Color.pink.opacity(0.18) : Color(.secondarySystemFill), in: .circle)
+                            .foregroundStyle(isFavourite ? Color.pink : .primary)
+                    }
+                    .buttonStyle(.plain)
+                    .contextMenu {
+                        Button("收藏分类", systemImage: "folder") { editingCategories = true }
+                        if isFavourite {
+                            Button("取消收藏", systemImage: "heart.slash", role: .destructive, action: removeFavourite)
                         }
                     }
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                actions(shown)
-                if !shown.tags.isEmpty {
-                    FlowLayout(spacing: 6) {
-                        ForEach(shown.tags, id: \.self) { tag in
-                            Text(tag).font(.caption).padding(.horizontal, 10).padding(.vertical, 5)
-                                .background(.quaternary, in: .capsule)
+                    .accessibilityLabel(isFavourite ? "已收藏" : "收藏")
+
+                    if shown.rating > 0 {
+                        HStack(spacing: 3) {
+                            Image(systemName: "star.fill")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.orange)
+                            Text(String(format: "%.1f", Double(shown.rating) * 5))
+                                .font(.caption.weight(.semibold))
                         }
-                    }
-                }
-                if let summary = shown.summary.map(Self.plainText), !summary.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(summary)
-                            .font(.callout)
-                            .lineLimit(isSummaryExpanded ? nil : 4)
-                            .textSelection(.enabled)
-                            .accessibilityIdentifier("details.summary")
-                        if summary.count > 120 || summary.filter({ $0 == "\n" }).count >= 4 {
-                            Button(isSummaryExpanded ? "收起" : "展开") { withAnimation { isSummaryExpanded.toggle() } }
-                                .font(.footnote.weight(.semibold))
-                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Color.orange.opacity(0.12), in: .capsule)
                     }
                 }
             }
-            .padding(.vertical, 8)
-            .listRowBackground(Color.clear)
-            .listRowInsets(EdgeInsets(top: 8, leading: 20, bottom: 8, trailing: 20))
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .listRowSeparator(.hidden)
+    }
+
+    private func authorItem(_ shown: IosSourceContent) -> some View {
+        Group {
+            if !shown.authors.isEmpty {
+                Menu {
+                    ForEach(shown.authors, id: \.self) { author in
+                        Section(author) {
+                            Button("在当前源搜索【\(author)】") {
+                                if let src = sources.sources.first(where: { $0.name == shown.sourceName }) {
+                                    destinationBrowse = src
+                                    browseInitialQuery = author
+                                }
+                            }
+                            Button("在全部源搜索【\(author)】") {
+                                destinationGlobalSearchQuery = author
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 6) {
+                        Image(systemName: "person.circle")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(shown.authors.joined(separator: "、"))
+                            .font(.subheadline.weight(.medium))
+                            .foregroundStyle(.primary)
+                            .lineLimit(1)
+                    }
+                }
+                .buttonStyle(.plain)
+            } else {
+                HStack(spacing: 6) {
+                    Image(systemName: "person.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text("佚名")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func infoCard(_ shown: IosSourceContent) -> some View {
+        VStack(spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                // Left Column: Author & Media Kind
+                VStack(alignment: .leading, spacing: 8) {
+                    authorItem(shown)
+
+                    HStack(spacing: 6) {
+                        Image(systemName: "character.book.closed")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text(Self.mediaKindTitle(shown.mediaKind))
+                            .font(.subheadline)
+                            .foregroundStyle(.primary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                // Right Column: State & Chapters
+                VStack(alignment: .leading, spacing: 8) {
+                    if let state = shown.state {
+                        HStack(spacing: 6) {
+                            Image(systemName: state == "ONGOING" ? "play.circle" : "checkmark.circle")
+                                .font(.caption)
+                                .foregroundStyle(Self.stateTint(state))
+                            Text(Self.stateTitle(state))
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(Self.stateTint(state))
+                        }
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: "questionmark.circle")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text("状态未知")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
+                    let totalChapters = model.isVideo ? model.visibleChapters.count : model.chapters.count
+                    if totalChapters > 0 {
+                        let progressText: String = {
+                            if let resume = resume, resume.progress > 0 {
+                                let readCount = model.chapters.firstIndex(where: { $0.id == resume.chapterId }).map { $0 + 1 } ?? 0
+                                return "\(readCount)/\(totalChapters)"
+                            } else {
+                                return model.isVideo ? "\(totalChapters) 集" : "\(totalChapters) 章"
+                            }
+                        }()
+                        Button {
+                            selectedTab = .chapters
+                            showingChaptersSheet = true
+                        } label: {
+                            HStack(spacing: 6) {
+                                Image(systemName: "book.pages")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                Text(progressText)
+                                    .font(.subheadline)
+                                    .foregroundStyle(.primary)
+                                Image(systemName: "chevron.right")
+                                    .font(.system(size: 8, weight: .bold))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if let resume = resume, resume.progress > 0 {
+                HStack(spacing: 8) {
+                    ProgressView(value: Double(resume.progress))
+                        .tint(Color.accentColor)
+                    Text("\(Int(resume.progress * 100))%")
+                        .font(.caption2.weight(.medium))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(14)
+        .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+        )
+    }
+
+    @ViewBuilder
+    private func summaryCard(_ shown: IosSourceContent) -> some View {
+        if let summary = shown.summary.map(Self.plainText), !summary.isEmpty || !shown.tags.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("简介")
+                    .font(.subheadline.weight(.bold))
+                    .foregroundStyle(.primary)
+
+                if let summary = shown.summary.map(Self.plainText), !summary.isEmpty {
+                    Text(summary)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineSpacing(3)
+                        .lineLimit(isSummaryExpanded ? nil : 3)
+                        .textSelection(.enabled)
+                        .onTapGesture { withAnimation { isSummaryExpanded.toggle() } }
+                        .accessibilityIdentifier("details.summary")
+
+                    if summary.count > 100 || summary.filter({ $0 == "\n" }).count >= 3 {
+                        Button(isSummaryExpanded ? "收起" : "展开") {
+                            withAnimation { isSummaryExpanded.toggle() }
+                        }
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .buttonStyle(.plain)
+                    }
+                }
+
+                if !shown.tags.isEmpty {
+                    FlowLayout(spacing: 6) {
+                        ForEach(shown.tags, id: \.self) { tag in
+                            Text(tag)
+                                .font(.caption)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .background(Color(.tertiarySystemFill), in: .capsule)
+                                .foregroundStyle(.primary)
+                        }
+                    }
+                    .padding(.top, 2)
+                }
+            }
+            .padding(14)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.06), lineWidth: 1)
+            )
+        }
     }
 
     /// Android's panorama cover at the top (or the softly blurred cover when it is turned off), faded into the
@@ -403,61 +782,401 @@ struct SourceDetailsView: View {
         .accessibilityHidden(true)
     }
 
-    /// Primary read/continue action plus favourite, mirroring Android's details action bar.
     @ViewBuilder
-    private func actions(_ shown: IosSourceContent) -> some View {
-        HStack(spacing: 12) {
-            if let details = model.details, let target = resumeChapter() ?? model.chapters.first {
-                let resuming = resumeChapter() != nil
-                let title = resuming ? (model.isVideo ? "继续播放" : "继续阅读") : (model.isVideo ? "开始播放" : "开始阅读")
-                Group {
-                    if model.isVideo {
-                        Button { playing = PlaybackRequest(content: details, chapter: target) } label: {
-                            primaryLabel(title, subtitle: target.title, icon: "play.fill")
+    private var relatedSection: some View {
+        if !model.related.isEmpty {
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("相关推荐")
+                        .font(.subheadline.weight(.bold))
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 16)
+
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        LazyHStack(alignment: .top, spacing: 12) {
+                            ForEach(model.related, id: \.id) { item in
+                                Button {
+                                    destinationDetails = item
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 6) {
+                                        CoverImage(runtime: model.runtime, content: item)
+                                            .frame(width: 96, height: 140)
+                                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                                            .overlay(
+                                                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                                    .strokeBorder(Color.white.opacity(0.12), lineWidth: 0.5)
+                                            )
+                                            .shadow(color: .black.opacity(0.12), radius: 4, y: 2)
+
+                                        Text(item.title)
+                                            .font(.caption)
+                                            .lineLimit(2, reservesSpace: true)
+                                            .frame(width: 96, alignment: .topLeading)
+                                            .foregroundStyle(.primary)
+                                    }
+                                    .frame(width: 96, alignment: .top)
+                                }
+                                .buttonStyle(.plain)
+                            }
                         }
-                    } else {
-                        // A NavigationLink inside a List row would turn the whole header into a row link.
-                        Button { reading = PlaybackRequest(content: details, chapter: target) } label: {
-                            primaryLabel(title, subtitle: target.title, icon: "book.fill")
-                        }
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 4)
                     }
                 }
-                .buttonStyle(.glassProminent)
-                .accessibilityIdentifier(resuming ? "details.resume" : "details.start")
-            } else {
-                Button {} label: { primaryLabel(model.isVideo ? "开始播放" : "开始阅读", subtitle: nil, icon: "book.fill") }
-                    .buttonStyle(.glassProminent).disabled(true)
+                .padding(.vertical, 6)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets())
             }
-            Button(isFavourite ? "整理收藏" : "收藏", systemImage: isFavourite ? "heart.fill" : "heart") {
-                editingCategories = true
-            }
-                .labelStyle(.iconOnly)
-                .font(.title3)
-                .foregroundStyle(isFavourite ? Color.pink : Color.primary)
-                .frame(width: 52, height: 52)
-                .buttonStyle(.glass).buttonBorderShape(.circle)
-                .accessibilityIdentifier("details.favourite")
-                .disabled(model.details == nil || savingFavourite)
-                .contextMenu {
-                    Button("收藏分类", systemImage: "folder") { editingCategories = true }
-                    if isFavourite {
-                        Button("取消收藏", systemImage: "heart.slash", role: .destructive, action: removeFavourite)
-                    }
-                }
+            .listRowSeparator(.hidden)
         }
     }
 
-    private func primaryLabel(_ title: String, subtitle: String?, icon: String) -> some View {
-        HStack(spacing: 10) {
-            Image(systemName: icon)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title).font(.headline)
-                if let subtitle { Text(subtitle).font(.caption).opacity(0.85).lineLimit(1) }
+    @ViewBuilder
+    private var dockTabsCapsule: some View {
+        HStack(spacing: 2) {
+            // 章节 (Chapters)
+            if !isDockCompact || selectedTab == .chapters {
+                Button {
+                    selectedTab = .chapters
+                    showingChaptersSheet = true
+                    if isDockCompact {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { isDockCompact = false }
+                    }
+                } label: {
+                    Image(systemName: model.isVideo ? "play.rectangle.on.rectangle" : "list.bullet")
+                        .font(.system(size: 15, weight: selectedTab == .chapters ? .bold : .medium))
+                        .frame(width: 38, height: 38)
+                        .background(selectedTab == .chapters ? Color.primary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .foregroundStyle(selectedTab == .chapters ? Color.primary : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(model.isVideo ? "剧集" : "章节")
             }
-            Spacer(minLength: 0)
+
+            // 缩略图 (Thumbnails / Grid) - Manga only
+            if !model.isNovel && !model.isVideo && (!isDockCompact || selectedTab == .thumbnails) {
+                Button {
+                    selectedTab = .thumbnails
+                    showingChaptersSheet = true
+                    if isDockCompact {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { isDockCompact = false }
+                    }
+                } label: {
+                    Image(systemName: "square.grid.2x2")
+                        .font(.system(size: 14, weight: selectedTab == .thumbnails ? .bold : .medium))
+                        .frame(width: 38, height: 38)
+                        .background(selectedTab == .thumbnails ? Color.primary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .foregroundStyle(selectedTab == .thumbnails ? Color.primary : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("缩略图")
+            }
+
+            // 书签 (Bookmarks) - Manga & Novel
+            if !model.isVideo && (!isDockCompact || selectedTab == .bookmarks) {
+                Button {
+                    selectedTab = .bookmarks
+                    showingChaptersSheet = true
+                    if isDockCompact {
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { isDockCompact = false }
+                    }
+                } label: {
+                    Image(systemName: selectedTab == .bookmarks ? "bookmark.fill" : "bookmark")
+                        .font(.system(size: 14, weight: selectedTab == .bookmarks ? .bold : .medium))
+                        .frame(width: 38, height: 38)
+                        .background(selectedTab == .bookmarks ? Color.primary.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .foregroundStyle(selectedTab == .bookmarks ? Color.primary : Color.secondary)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("书签")
+            }
         }
-        .frame(maxWidth: .infinity, minHeight: 40)
         .padding(.horizontal, 6)
+        .frame(height: 50)
+        .background(.regularMaterial, in: .capsule)
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08), lineWidth: 1))
+    }
+
+    @ViewBuilder
+    private var dockPrimaryActionCapsule: some View {
+        if let details = model.details, let target = resumeChapter() ?? model.chapters.first {
+            let resuming = resumeChapter() != nil
+            let title = resuming ? (model.isVideo ? "继续播放" : "继续") : (model.isVideo ? "开始播放" : "开始阅读")
+
+            HStack(spacing: 0) {
+                Button {
+                    if model.isVideo {
+                        playing = PlaybackRequest(content: details, chapter: target)
+                    } else {
+                        reading = PlaybackRequest(content: details, chapter: target)
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: model.isVideo ? "play.fill" : "book.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                        if !isDockCompact {
+                            Text(title)
+                                .font(.subheadline.weight(.bold))
+                                .lineLimit(1)
+                        }
+                    }
+                    .padding(.horizontal, isDockCompact ? 14 : 18)
+                    .frame(maxWidth: isDockCompact ? nil : .infinity)
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Divider()
+                    .frame(height: 20)
+                    .overlay(Color.white.opacity(0.35))
+
+                Menu {
+                    Button("换源…", systemImage: "arrow.triangle.swap") {
+                        changingSource = true
+                    }
+                    .disabled(library.library == nil || (model.details == nil && model.isLoading))
+
+                    if model.branches.count > 1 {
+                        Section("切换线路/分支") {
+                            ForEach(model.branches, id: \.self) { branch in
+                                Button(branch ?? "默认") {
+                                    model.selectedBranch = branch
+                                }
+                            }
+                        }
+                    }
+                    if let first = model.chapters.first {
+                        Button(model.isVideo ? "从第一集开始播放" : "从第一话开始阅读") {
+                            if model.isVideo {
+                                playing = PlaybackRequest(content: details, chapter: first)
+                            } else {
+                                reading = PlaybackRequest(content: details, chapter: first)
+                            }
+                        }
+                    }
+                } label: {
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 12, weight: .bold))
+                        .frame(width: 34, height: 50)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            .frame(height: 50)
+            .foregroundStyle(.white)
+            .background(Color.accentColor, in: .capsule)
+        } else {
+            HStack(spacing: 8) {
+                ProgressView().tint(.white)
+                if !isDockCompact {
+                    Text("正在准备…").font(.subheadline.weight(.semibold))
+                }
+            }
+            .padding(.horizontal, isDockCompact ? 14 : 20)
+            .frame(maxWidth: isDockCompact ? nil : .infinity)
+            .frame(height: 50)
+            .foregroundStyle(.white)
+            .background(Color.accentColor.opacity(0.6), in: .capsule)
+        }
+    }
+
+    @ViewBuilder
+    private var floatingActionBar: some View {
+        HStack(spacing: 8) {
+            dockTabsCapsule
+            Spacer(minLength: 8)
+            dockPrimaryActionCapsule
+        }
+        .offset(y: min(0, dockDragOffset))
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 8)
+                .onChanged { value in
+                    if value.translation.height < 0 {
+                        dockDragOffset = max(-28, value.translation.height * 0.45)
+                    }
+                }
+                .onEnded { value in
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) {
+                        dockDragOffset = 0
+                    }
+                    if value.translation.height < -15 || value.predictedEndTranslation.height < -30 {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        if isDockCompact {
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                isDockCompact = false
+                            }
+                        }
+                        showingChaptersSheet = true
+                    }
+                }
+        )
+        .shadow(color: .black.opacity(0.12), radius: 12, y: 5)
+        .padding(.horizontal, 16)
+        .padding(.bottom, 6)
+        .animation(.spring(response: 0.35, dampingFraction: 0.8), value: isDockCompact)
+    }
+
+    private func openChapter(_ chapter: IosSourceChapter, from details: IosSourceContent) {
+        if showingChaptersSheet {
+            showingChaptersSheet = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                if model.isVideo {
+                    playing = PlaybackRequest(content: details, chapter: chapter)
+                } else {
+                    reading = PlaybackRequest(content: details, chapter: chapter)
+                }
+            }
+        } else {
+            if model.isVideo {
+                playing = PlaybackRequest(content: details, chapter: chapter)
+            } else {
+                reading = PlaybackRequest(content: details, chapter: chapter)
+            }
+        }
+    }
+
+    private var sheetTitle: String {
+        if model.isVideo {
+            return "剧集列表"
+        }
+        switch selectedTab {
+        case .chapters: return "章节（\(model.chapters.count)）"
+        case .thumbnails: return "章节网格"
+        case .bookmarks: return "书签（\(bookmarks.count)）"
+        }
+    }
+
+    private func chaptersSheet(_ details: IosSourceContent) -> some View {
+        NavigationStack {
+            Group {
+                if model.isVideo {
+                    List {
+                        episodes(details)
+                    }
+                    .listStyle(.insetGrouped)
+                } else {
+                    TabView(selection: $selectedTab) {
+                        List {
+                            chapters(details)
+                        }
+                        .listStyle(.insetGrouped)
+                        .tag(DetailsTab.chapters)
+
+                        if !model.isNovel {
+                            ChapterThumbnailsView(
+                                runtime: model.runtime,
+                                details: details,
+                                chapters: model.chapterList(query: chapterQuery, newestFirst: newestFirst),
+                                initialChapter: resumeChapter() ?? model.chapters.first,
+                                resume: resume,
+                                onSelectPage: { chapter, pageIndex in
+                                    showingChaptersSheet = false
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                                        reading = PlaybackRequest(content: details, chapter: chapter, initialPage: pageIndex)
+                                    }
+                                }
+                            )
+                            .tag(DetailsTab.thumbnails)
+                        }
+
+                        List {
+                            bookmarksList(details)
+                        }
+                        .listStyle(.insetGrouped)
+                        .tag(DetailsTab.bookmarks)
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                }
+            }
+            .navigationTitle(sheetTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                if !model.isVideo {
+                    ToolbarItem(placement: .principal) {
+                        Picker("视图", selection: $selectedTab) {
+                            Text("章节").tag(DetailsTab.chapters)
+                            if !model.isNovel {
+                                Text("缩略图").tag(DetailsTab.thumbnails)
+                            }
+                            Text("书签").tag(DetailsTab.bookmarks)
+                        }
+                        .pickerStyle(.segmented)
+                        .frame(maxWidth: 240)
+                    }
+                }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("完成") {
+                        showingChaptersSheet = false
+                    }
+                    .font(.body.weight(.semibold))
+                }
+            }
+        }
+        .presentationDetents([.medium, .large])
+        .presentationDragIndicator(.visible)
+    }
+
+    private func bookmarksList(_ details: IosSourceContent) -> some View {
+        Section("书签 (\(bookmarks.count))") {
+            if bookmarks.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "bookmark")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.tertiary)
+                    Text("暂无书签")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
+                    Text("在阅读界面点击书签按钮即可在此处快速定位")
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 32)
+                .listRowBackground(Color.clear)
+            } else {
+                ForEach(bookmarks, id: \.id) { bookmark in
+                    let chapter = model.chapters.first { $0.id == bookmark.chapterId }
+                    Button {
+                        if let chapter = chapter ?? model.chapters.first {
+                            openChapter(chapter, from: details)
+                        }
+                    } label: {
+                        HStack(spacing: 12) {
+                            Image(systemName: "bookmark.fill")
+                                .font(.subheadline)
+                                .foregroundStyle(Color.accentColor)
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(chapter?.title ?? "第 \(bookmark.index + 1) 页")
+                                    .font(.subheadline.weight(.medium))
+                                if !bookmark.preview.isEmpty {
+                                    Text(bookmark.preview)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(2)
+                                }
+                            }
+                            Spacer()
+                            Text("第 \(bookmark.index + 1) 页")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                    .buttonStyle(.plain)
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            Task {
+                                try? await library.library?.removeBookmark(content: details, bookmark: bookmark)
+                                await refreshBookmarks()
+                            }
+                        } label: {
+                            Label("删除", systemImage: "trash")
+                        }
+                    }
+                }
+            }
+        }
     }
 
     private func pill(_ text: String, tint: Color) -> some View {
@@ -470,6 +1189,15 @@ struct SourceDetailsView: View {
     private func resumeChapter() -> IosSourceChapter? {
         guard let resume else { return nil }
         return model.chapters.first { $0.id == resume.chapterId }
+    }
+
+    static func mediaKindTitle(_ kind: String) -> String {
+        switch kind {
+        case "MANGA": "漫画"
+        case "NOVEL": "小说"
+        case "VIDEO": "视频"
+        default: kind
+        }
     }
 
     static func stateTitle(_ state: String) -> String {
@@ -508,7 +1236,7 @@ struct SourceDetailsView: View {
                 // Long episode names (e.g. "Episode 1 - I'm Luffy!") read better one per row.
                 ForEach(model.visibleChapters, id: \.id) { chapter in
                     Button {
-                        playing = PlaybackRequest(content: details, chapter: chapter)
+                        openChapter(chapter, from: details)
                     } label: {
                         Label(Self.episodeTitle(chapter), systemImage: "play.circle")
                     }
@@ -520,7 +1248,7 @@ struct SourceDetailsView: View {
                 HStack(spacing: 10) {
                     ForEach(row, id: \.id) { chapter in
                         Button {
-                            playing = PlaybackRequest(content: details, chapter: chapter)
+                            openChapter(chapter, from: details)
                         } label: {
                             Text(Self.episodeTitle(chapter))
                                 .font(.subheadline)
@@ -571,12 +1299,8 @@ struct SourceDetailsView: View {
                 let index = model.chapters.firstIndex { $0.id == chapter.id }
                 let isCurrent = chapter.id == current?.id
                 let isRead = !isCurrent && index != nil && currentIndex != nil && index! < currentIndex!
-                NavigationLink {
-                    if model.isNovel {
-                        NovelReaderView(runtime: model.runtime, content: details, chapter: chapter)
-                    } else {
-                        SourceReaderView(runtime: model.runtime, content: details, chapter: chapter)
-                    }
+                Button {
+                    openChapter(chapter, from: details)
                 } label: {
                     HStack(spacing: 10) {
                         VStack(alignment: .leading, spacing: 2) {
@@ -594,6 +1318,7 @@ struct SourceDetailsView: View {
                         }
                     }
                 }
+                .buttonStyle(.plain)
                 .listRowBackground(isCurrent ? Color.accentColor.opacity(0.12) : nil)
                 .accessibilityIdentifier("chapter.\(chapter.id)")
             }
@@ -665,7 +1390,438 @@ struct SourceDetailsView: View {
 struct PlaybackRequest: Identifiable, Hashable {
     let content: IosSourceContent
     let chapter: IosSourceChapter
+    var initialPage: Int? = nil
     let id = UUID()
     static func == (lhs: Self, rhs: Self) -> Bool { lhs.id == rhs.id }
     func hash(into hasher: inout Hasher) { hasher.combine(id) }
+}
+
+struct CoverPreviewSheet: View {
+    let runtime: IosSources
+    let content: IosSourceContent
+    @Environment(\.dismiss) private var dismiss
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+
+    var body: some View {
+        NavigationStack {
+            GeometryReader { _ in
+                ZStack {
+                    Color.black.ignoresSafeArea()
+                    CoverImage(runtime: runtime, content: content)
+                        .aspectRatio(contentMode: .fit)
+                        .scaleEffect(scale)
+                        .gesture(
+                            MagnificationGesture()
+                                .onChanged { value in
+                                    scale = max(1.0, lastScale * value)
+                                }
+                                .onEnded { _ in
+                                    lastScale = scale
+                                }
+                        )
+                        .onTapGesture(count: 2) {
+                            withAnimation(.spring()) {
+                                scale = scale > 1.5 ? 1.0 : 2.5
+                                lastScale = scale
+                            }
+                        }
+                }
+            }
+            .navigationTitle("封面")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("完成") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if let url = URL(string: content.publicUrl) {
+                        ShareLink(item: url) {
+                            Image(systemName: "square.and.arrow.up")
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@MainActor
+final class PageThumbnailStore {
+    static let shared = PageThumbnailStore()
+    private var cache = NSCache<NSString, UIImage>()
+
+    init() {
+        cache.countLimit = 150
+        cache.totalCostLimit = 80 * 1024 * 1024
+    }
+
+    func cachedImage(key: String) -> UIImage? {
+        cache.object(forKey: key as NSString)
+    }
+
+    func putImage(_ image: UIImage, key: String) {
+        let cost = Int(image.size.width * image.size.height * 4)
+        cache.setObject(image, forKey: key as NSString, cost: cost)
+    }
+}
+
+struct PageThumbnailCard: View {
+    let runtime: IosSources
+    let content: IosSourceContent
+    let chapter: IosSourceChapter
+    let page: IosSourcePage
+    let index: Int
+    let isCurrent: Bool
+    var initialImage: UIImage? = nil
+    let onTap: () -> Void
+
+    @State private var image: UIImage?
+    @State private var isLoading = false
+    @State private var loadFailed = false
+
+    private var cacheKey: String { "\(chapter.id)_\(index)" }
+
+    init(
+        runtime: IosSources,
+        content: IosSourceContent,
+        chapter: IosSourceChapter,
+        page: IosSourcePage,
+        index: Int,
+        isCurrent: Bool,
+        initialImage: UIImage? = nil,
+        onTap: @escaping () -> Void
+    ) {
+        self.runtime = runtime
+        self.content = content
+        self.chapter = chapter
+        self.page = page
+        self.index = index
+        self.isCurrent = isCurrent
+        self.initialImage = initialImage
+        self.onTap = onTap
+        if let initialImage {
+            _image = State(initialValue: initialImage)
+        } else if let cached = PageThumbnailStore.shared.cachedImage(key: "\(chapter.id)_\(index)") {
+            _image = State(initialValue: cached)
+        }
+    }
+
+    var body: some View {
+        Button(action: onTap) {
+            ZStack(alignment: .bottomTrailing) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color(.secondarySystemFill))
+                    .aspectRatio(0.7, contentMode: .fit)
+
+                if let image {
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .clipped()
+                } else if isLoading {
+                    ProgressView()
+                        .scaleEffect(0.8)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else if loadFailed {
+                    VStack(spacing: 4) {
+                        Image(systemName: "photo")
+                            .font(.subheadline)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+
+                Text("\(index + 1)")
+                    .font(.system(size: 10, weight: .bold))
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 2)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+                    .foregroundStyle(.primary)
+                    .padding(5)
+
+                if isCurrent {
+                    VStack {
+                        HStack {
+                            Image(systemName: "bookmark.fill")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.white)
+                                .padding(4)
+                                .background(Color.accentColor, in: Circle())
+                                .padding(5)
+                            Spacer()
+                        }
+                        Spacer()
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .strokeBorder(isCurrent ? Color.accentColor : Color.primary.opacity(0.08), lineWidth: isCurrent ? 2.5 : 1)
+            )
+        }
+        .buttonStyle(.plain)
+        .task(id: page.url) {
+            guard image == nil else { return }
+            if let cached = PageThumbnailStore.shared.cachedImage(key: cacheKey) {
+                self.image = cached
+                return
+            }
+            isLoading = true
+            loadFailed = false
+            do {
+                let img = try await ReaderDownloads.image(runtime: runtime, content: content, chapter: chapter, page: page, index: index, cropMargins: false)
+                PageThumbnailStore.shared.putImage(img, key: cacheKey)
+                self.image = img
+                self.isLoading = false
+            } catch {
+                if !Task.isCancelled {
+                    self.isLoading = false
+                    self.loadFailed = true
+                }
+            }
+        }
+    }
+}
+
+struct ChapterThumbnailsView: View {
+    let runtime: IosSources
+    let details: IosSourceContent
+    let chapters: [IosSourceChapter]
+    let initialChapter: IosSourceChapter?
+    var initialPages: [IosSourcePage]? = nil
+    var currentReadingPage: Int? = nil
+    var memoryImages: [Int: UIImage]? = nil
+    let resume: IosReadingPosition?
+    let onSelectPage: (IosSourceChapter, Int) -> Void
+
+    @State private var selectedChapter: IosSourceChapter?
+    @State private var pages: [IosSourcePage] = []
+    @State private var isLoading = false
+    @State private var errorText: String?
+    @State private var taskToken = UUID()
+
+    private var currentChapterIndex: Int {
+        guard let selected = selectedChapter else { return 0 }
+        return chapters.firstIndex(where: { $0.id == selected.id }) ?? 0
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            chapterSelectorBar
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(Color(.secondarySystemGroupedBackground))
+
+            Divider()
+
+            if isLoading {
+                VStack(spacing: 12) {
+                    ProgressView()
+                    Text("正在加载页面缩略图…")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if let errorText {
+                VStack(spacing: 12) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .font(.title2)
+                        .foregroundStyle(.orange)
+                    Text(errorText)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .padding(.horizontal, 24)
+                    Button("重试") {
+                        if let selected = selectedChapter {
+                            loadPages(for: selected)
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if pages.isEmpty {
+                VStack(spacing: 10) {
+                    Image(systemName: "photo.on.rectangle")
+                        .font(.system(size: 32))
+                        .foregroundStyle(.tertiary)
+                    Text("本章暂无页面")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVGrid(
+                        columns: [
+                            GridItem(.flexible(), spacing: 10),
+                            GridItem(.flexible(), spacing: 10),
+                            GridItem(.flexible(), spacing: 10)
+                        ],
+                        spacing: 10
+                    ) {
+                        ForEach(Array(pages.enumerated()), id: \.offset) { index, page in
+                            if let chapter = selectedChapter {
+                                let isCurrent = currentReadingPage != nil
+                                    ? (chapter.id == initialChapter?.id && index == currentReadingPage)
+                                    : (resume?.chapterId == chapter.id && resume?.index == Int32(index))
+                                PageThumbnailCard(
+                                    runtime: runtime,
+                                    content: details,
+                                    chapter: chapter,
+                                    page: page,
+                                    index: index,
+                                    isCurrent: isCurrent,
+                                    initialImage: chapter.id == initialChapter?.id ? memoryImages?[index] : nil,
+                                    onTap: {
+                                        onSelectPage(chapter, index)
+                                    }
+                                )
+                            }
+                        }
+                    }
+                    .padding(14)
+
+                    HStack(spacing: 16) {
+                        Button {
+                            selectAdjacentChapter(forward: false)
+                        } label: {
+                            Label("上一章", systemImage: "chevron.left")
+                                .font(.footnote.weight(.medium))
+                        }
+                        .disabled(currentChapterIndex <= 0)
+
+                        Spacer()
+
+                        Text("\(pages.count) 页")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        Spacer()
+
+                        Button {
+                            selectAdjacentChapter(forward: true)
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text("下一章")
+                                Image(systemName: "chevron.right")
+                            }
+                            .font(.footnote.weight(.medium))
+                        }
+                        .disabled(currentChapterIndex >= chapters.count - 1)
+                    }
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 16)
+                }
+            }
+        }
+        .onAppear {
+            if selectedChapter == nil {
+                let initial = initialChapter ?? chapters.first
+                selectedChapter = initial
+                if let initial {
+                    loadPages(for: initial)
+                }
+            }
+        }
+        .onChange(of: selectedChapter?.id) { _, _ in
+            if let chapter = selectedChapter {
+                loadPages(for: chapter)
+            }
+        }
+    }
+
+    private var chapterSelectorBar: some View {
+        HStack(spacing: 8) {
+            Button {
+                selectAdjacentChapter(forward: false)
+            } label: {
+                Image(systemName: "chevron.left")
+                    .font(.footnote.weight(.semibold))
+                    .frame(width: 30, height: 30)
+                    .background(Color(.tertiarySystemFill), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(currentChapterIndex <= 0)
+
+            Spacer()
+
+            Menu {
+                ForEach(chapters, id: \.id) { ch in
+                    Button {
+                        selectedChapter = ch
+                    } label: {
+                        HStack {
+                            Text(ch.title)
+                            if ch.id == selectedChapter?.id {
+                                Image(systemName: "checkmark")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                HStack(spacing: 5) {
+                    Text(selectedChapter?.title ?? "选择章节")
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Color(.tertiarySystemFill), in: Capsule())
+            }
+            .buttonStyle(.plain)
+
+            Spacer()
+
+            Button {
+                selectAdjacentChapter(forward: true)
+            } label: {
+                Image(systemName: "chevron.right")
+                    .font(.footnote.weight(.semibold))
+                    .frame(width: 30, height: 30)
+                    .background(Color(.tertiarySystemFill), in: Circle())
+            }
+            .buttonStyle(.plain)
+            .disabled(currentChapterIndex >= chapters.count - 1)
+        }
+    }
+
+    private func selectAdjacentChapter(forward: Bool) {
+        let nextIndex = forward ? currentChapterIndex + 1 : currentChapterIndex - 1
+        guard chapters.indices.contains(nextIndex) else { return }
+        selectedChapter = chapters[nextIndex]
+    }
+
+    private func loadPages(for chapter: IosSourceChapter) {
+        if let initialChapter, chapter.id == initialChapter.id, let initialPages, !initialPages.isEmpty {
+            self.pages = initialPages
+            self.isLoading = false
+            self.errorText = nil
+            return
+        }
+        let token = UUID()
+        taskToken = token
+        isLoading = true
+        errorText = nil
+        pages = []
+        Task {
+            do {
+                let result = try await ReaderDownloads.pages(runtime: runtime, content: details, chapter: chapter)
+                guard taskToken == token else { return }
+                self.pages = result
+                self.isLoading = false
+            } catch {
+                guard taskToken == token else { return }
+                self.errorText = SourceErrorText.describe(error)
+                self.isLoading = false
+            }
+        }
+    }
 }

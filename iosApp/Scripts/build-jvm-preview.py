@@ -96,7 +96,7 @@ def java_image(mobile, build, output):
     linker_classes = WORK / "kototoro-jlink-classes"
     run([tools / "javac", "--patch-module", "jdk.jlink=" + str(WORK / "kototoro-jlink-source"),
          "-d", linker_classes, linker_source])
-    modules = ["java.base", "java.xml", "java.logging", "jdk.unsupported", "jdk.localedata"]
+    modules = ["java.base", "java.xml", "java.logging", "jdk.unsupported", "jdk.localedata", "jdk.charsets"]
     with tempfile.TemporaryDirectory(prefix="java-image-", dir=WORK) as temporary:
         temporary = Path(temporary)
         jmods = temporary / "jmods"
@@ -238,13 +238,13 @@ def main():
         print(arguments.platform + " JVM preview ready:", output, flush=True)
         return
 
-    run(["make", "LOG=info", "CONF=" + conf, "jdk.unsupported-java", "jdk.localedata-java", "java.base-gendata"], cwd=mobile, env=env)
+    run(["make", "LOG=info", "CONF=" + conf, "jdk.unsupported-java", "jdk.localedata-java", "jdk.charsets-java", "java.base-gendata"], cwd=mobile, env=env)
     java_image(mobile, build, output)
     (output / "runtime-origin.json").write_text(json.dumps({
         "openjdkRevision": PINS["openjdkRevision"], "adaptationSha256": patch_version,
         "platformAdaptationSha256": hashlib.sha256(
             inspect.getsource(adaptation.patch_platform_properties).encode()).hexdigest(),
-        "modules": ["java.base", "java.xml", "java.logging", "jdk.unsupported", "jdk.localedata"],
+        "modules": ["java.base", "java.xml", "java.logging", "jdk.unsupported", "jdk.localedata", "jdk.charsets"],
         "nativeExports": count,
     }, indent=2))
     run([ROOT / "gradlew", ":source-host:installDist", ":source-host:exportEmbeddedFixture", "--no-daemon"], cwd=ROOT, env=env)

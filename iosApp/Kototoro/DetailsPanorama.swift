@@ -75,6 +75,8 @@ struct DetailsPanorama: View {
             let stretch = max(-scrollOffset, 0)
             let follows = layout == .top && scrollLinked
             let motion = animated && !reduceMotion
+            let fadeDistance: CGFloat = 200.0
+            let scrollAlpha = max(0.0, min(1.0, 1.0 - (max(scrollOffset, 0) / fadeDistance)))
             CoverImage(runtime: runtime, content: content, plain: true)
                 .frame(width: geometry.size.width, height: base + stretch)
                 .scaleEffect(motion ? (drifting ? 1.16 : 1.1) : 1, anchor: .center) // the pan never shows an edge
@@ -82,7 +84,7 @@ struct DetailsPanorama: View {
                 .blur(radius: values.blur / 100 * 18, opaque: false)
                 .frame(width: geometry.size.width, height: base + stretch)
                 .clipped()
-                .opacity(values.opacity / 100)
+                .opacity((values.opacity / 100) * scrollAlpha)
                 .mask(Self.fade(range: values.range / 100))
                 .offset(y: follows ? -max(scrollOffset, 0) : 0)
         }

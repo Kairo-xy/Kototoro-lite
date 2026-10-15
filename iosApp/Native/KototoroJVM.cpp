@@ -154,6 +154,7 @@ int ktr_vm_start(const char *java_home, const char *classpath,
         {const_cast<char *>("-Xrs"), nullptr}, {const_cast<char *>("-Xms16m"), nullptr},
         {const_cast<char *>("-Xmx128m"), nullptr}, {const_cast<char *>("-Xss512k"), nullptr},
         {const_cast<char *>("-Djava.awt.headless=true"), nullptr},
+        {const_cast<char *>("-Dfile.encoding=UTF-8"), nullptr},
     };
     for (auto &option : extra) options.push_back({option.data(), nullptr});
     JavaVMInitArgs arguments{};
