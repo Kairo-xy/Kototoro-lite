@@ -1213,11 +1213,10 @@ struct SourceReaderView: View {
                     .frame(width: CGFloat(placement.width), height: CGFloat(placement.height))
                     .id(Int(slot.index))
             } else {
+                let animation = settings.value.animation
+                let mode = settings.value.mode
                 ReaderSpread(model: model, settings: settings, slot: slot, size: size) { tap(at: $0, size: size) }
-                    .scrollTransition(.interactive, axis: settings.value.mode == 2 ? .vertical : .horizontal) { content, phase in
-                        content.opacity(!reduceMotion && settings.value.animation == 2 && !phase.isIdentity ? 0 : 1)
-                            .scaleEffect(!reduceMotion && settings.value.animation == 3 && !phase.isIdentity ? 0.85 : 1)
-                    }
+                    .modifier(ReaderPageTransition(animation: animation, vertical: mode == 2, reduceMotion: reduceMotion))
             }
         }
     }
@@ -1647,6 +1646,23 @@ private struct ReaderStripZoom: ViewModifier {
                 .accessibilityAction(named: zoom > 1 ? "还原缩放" : "放大") {
                     commit(zoom > 1 ? 1 : 2, CGPoint(x: size.width / 2, y: size.height / 2))
                 }
+        } else {
+            content
+        }
+    }
+}
+
+private struct ReaderPageTransition: ViewModifier {
+    let animation: Int
+    let vertical: Bool
+    let reduceMotion: Bool
+
+    func body(content: Content) -> some View {
+        if !reduceMotion && (animation == 2 || animation == 3) {
+            content.scrollTransition(.interactive, axis: vertical ? .vertical : .horizontal) { content, phase in
+                content.opacity(animation == 2 && !phase.isIdentity ? 0 : 1)
+                    .scaleEffect(animation == 3 && !phase.isIdentity ? 0.85 : 1)
+            }
         } else {
             content
         }
