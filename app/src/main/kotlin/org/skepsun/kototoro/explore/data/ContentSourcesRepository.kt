@@ -107,6 +107,7 @@ class ContentSourcesRepository @Inject constructor(
     private val dao get() = db.getSourcesDao()
     private val jsonDao get() = db.getJsonSourceDao()
     private val isNewSourcesAssimilated = AtomicBoolean(false)
+    private var lastReconciledLockRevision = -1
     private val cachedKotatsuSources = java.util.concurrent.ConcurrentHashMap<String, org.skepsun.kototoro.core.parser.kotatsu.KotatsuParserSource>()
     private val tvBoxRepositorySelection: StateFlow<TVBoxRepositorySelection> = combine(
         jsonDao.observeEnabledSummaries(),
@@ -232,6 +233,7 @@ class ContentSourcesRepository @Inject constructor(
     suspend fun getEnabledSources(): List<ContentSource> {
         normalizeAllEnabledFlagIfNeeded()
         assimilateNewSources()
+        reconcileLocks()
         val order = settings.sourcesSortOrder
         val disabledNames = if (!settings.isAllSourcesEnabled) dao.findAll().filter { !it.isEnabled }.mapToSet { it.source } else emptySet<String>()
 
@@ -1001,6 +1003,24 @@ class ContentSourcesRepository @Inject constructor(
         result
     }.onStart { assimilateNewSources() }
 
+    private val lockStore: org.skepsun.kototoro.settings.sources.lock.SourceLockStore?
+        get() = runCatching { org.skepsun.kototoro.settings.sources.lock.SourceLockStore.get(context) }.getOrNull()
+
+    fun lockState(name: String): Boolean? = lockStore?.get(name)
+
+    fun observeLocks(): Flow<Map<String, Boolean>> = lockStore?.locks ?: kotlinx.coroutines.flow.flowOf(emptyMap())
+
+    fun observeLock(source: ContentSource): Flow<Boolean?> = observeLocks().map { it[source.name] }.distinctUntilChanged()
+
+    /** Locks the source at [lockedEnabled] (and applies that state), or unlocks it when null. */
+    suspend fun setSourceLock(source: ContentSource, lockedEnabled: Boolean?) {
+        val store = lockStore ?: return
+        store.set(source.name, lockedEnabled)
+        if (lockedEnabled != null) {
+            setSourcesEnabledImpl(listOf(source), lockedEnabled, force = true)
+        }
+    }
+
     suspend fun setSourcesEnabled(sources: Collection<ContentSource>, isEnabled: Boolean): ReversibleHandle {
         setSourcesEnabledImpl(sources, isEnabled)
         return ReversibleHandle {
@@ -1008,9 +1028,34 @@ class ContentSourcesRepository @Inject constructor(
         }
     }
 
+    /**
+     * Once per process and again after every external change of the lock prefs (settings sync): forces every locked source into its locked state. The lock map lives in its own
+     * preferences, so a backup restore / sync can leave the DB row disagreeing with the lock (the list
+     * shows the lock, Explore uses the DB). The lock always wins.
+     */
+    private suspend fun reconcileLocks() {
+        val store = lockStore ?: return
+        val revision = store.externalRevision.get()
+        if (revision == lastReconciledLockRevision) return
+        lastReconciledLockRevision = revision
+        val locks = store.locks.value
+        if (locks.isEmpty()) return
+        val jsonOn = locks.filter { it.value && it.key.startsWith("JSON_") }.keys.toList()
+        val jsonOff = locks.filter { !it.value && it.key.startsWith("JSON_") }.keys.toList()
+        if (jsonOn.isNotEmpty()) jsonSourceManager.toggleSourcesBatch(jsonOn, true)
+        if (jsonOff.isNotEmpty()) jsonSourceManager.toggleSourcesBatch(jsonOff, false)
+        val nativeLocks = locks.filterKeys { !it.startsWith("JSON_") }
+        if (nativeLocks.isNotEmpty()) {
+            db.withTransaction {
+                for ((name, enabled) in nativeLocks) dao.setEnabled(name, enabled, BuildConfig.VERSION_CODE)
+            }
+        }
+    }
+
     suspend fun setSourcesEnabledExclusive(sources: Set<ContentSource>) {
         val allSources = queryAllSources(includeDisabledSources = true)
         val enabledNames = sources.map { it.name }.toSet()
+        val locks = lockStore?.locks?.value.orEmpty()
 
         val jsonSourcesToEnable = mutableListOf<String>()
         val jsonSourcesToDisable = mutableListOf<String>()
@@ -1018,7 +1063,7 @@ class ContentSourcesRepository @Inject constructor(
         val nativeSourcesToDisable = mutableListOf<String>()
 
         for (s in allSources) {
-            val isEnabled = s.name in enabledNames
+            val isEnabled = locks[s.name] ?: (s.name in enabledNames)
             if (s.name.startsWith("JSON_")) {
                 if (isEnabled) jsonSourcesToEnable.add(s.name) else jsonSourcesToDisable.add(s.name)
             } else {
@@ -1168,7 +1213,14 @@ class ContentSourcesRepository @Inject constructor(
         }
     }
 
-    private suspend fun setSourcesEnabledImpl(sources: Collection<ContentSource>, isEnabled: Boolean) {
+    private suspend fun setSourcesEnabledImpl(
+        requested: Collection<ContentSource>,
+        isEnabled: Boolean,
+        force: Boolean = false,
+    ) {
+        val locks = if (force) emptyMap() else lockStore?.locks?.value.orEmpty()
+        val sources = if (locks.isEmpty()) requested else requested.filter { it.name !in locks }
+        if (sources.isEmpty()) return
         if (!isEnabled && settings.isAllSourcesEnabled) {
             materializeAllEnabledState()
         }

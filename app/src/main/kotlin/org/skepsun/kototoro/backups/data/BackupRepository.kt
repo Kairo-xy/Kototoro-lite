@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.asFlow
 import kotlinx.coroutines.flow.collectIndexed
+import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
@@ -42,6 +43,10 @@ import org.skepsun.kototoro.backups.data.model.FavouriteBackup
 import org.skepsun.kototoro.backups.data.model.HistoryBackup
 import org.skepsun.kototoro.backups.data.model.ScrobblingBackup
 import org.skepsun.kototoro.backups.data.model.SourceBackup
+import org.skepsun.kototoro.settings.sources.groups.SOURCE_GROUP_MAX_BYTES
+import org.skepsun.kototoro.settings.sources.groups.SourceGroup
+import org.skepsun.kototoro.settings.sources.groups.SourceGroupJson
+import org.skepsun.kototoro.settings.sources.groups.isValid
 import org.skepsun.kototoro.backups.data.model.SourceOriginBackup
 import org.skepsun.kototoro.backups.data.model.StatisticBackup
 import org.skepsun.kototoro.backups.data.model.TagBackup
@@ -232,6 +237,9 @@ class BackupRepository @Inject constructor(
     private val savedFiltersRepository: SavedFiltersRepository,
 ) {
 
+    private val sourceLocks: org.skepsun.kototoro.settings.sources.lock.SourceLockStore
+        get() = org.skepsun.kototoro.settings.sources.lock.SourceLockStore.get(appContext)
+
     enum class ExportFormat(
         val sections: List<BackupSection>,
     ) {
@@ -371,9 +379,37 @@ class BackupRepository @Inject constructor(
 
                 BackupSection.SOURCES -> output.writeJsonArray(
                     section = BackupSection.SOURCES,
-                    data = database.getSourcesDao().dumpEnabled()
-                        .filter { format != ExportFormat.KOTATSU || it.source in kotatsuSourceNames }
-                        .map { SourceBackup(it) },
+                    data = (
+                        if (format == ExportFormat.KOTATSU) {
+                            database.getSourcesDao().dumpEnabled()
+                        } else {
+                            database.getSourcesDao().findAll().asFlow()
+                        }
+                    ).filter { format != ExportFormat.KOTATSU || it.source in kotatsuSourceNames }
+                        .map { SourceBackup(it, SourceBackup.lockCode(sourceLocks.get(it.source))) }
+                        .let { native ->
+                            if (format == ExportFormat.KOTATSU) {
+                                native
+                            } else {
+                                // JSON sources are stored in their own table; export their locks too.
+                                kotlinx.coroutines.flow.flow {
+                                    emitAll(native)
+                                    database.getJsonSourceDao().findAll().forEach {
+                                        emit(
+                                            SourceBackup(
+                                                source = it.id,
+                                                sortKey = 0,
+                                                lastUsedAt = it.lastUsedAt,
+                                                addedIn = 0,
+                                                isPinned = it.isPinned,
+                                                isEnabled = it.enabled,
+                                                lock = SourceBackup.lockCode(sourceLocks.get(it.id)),
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
+                        },
                     serializer = serializer(),
                 )
 
@@ -395,6 +431,12 @@ class BackupRepository @Inject constructor(
                         serializer = serializer(),
                     )
                 }
+
+                BackupSection.EXTENSION_GROUPS -> output.writeJsonArray(
+                    section = BackupSection.EXTENSION_GROUPS,
+                    data = readStoredSourceGroups().asFlow(),
+                    serializer = serializer(),
+                )
 
                 BackupSection.SCROBBLING -> output.writeJsonArray(
                     section = BackupSection.SCROBBLING,
@@ -625,7 +667,14 @@ class BackupRepository @Inject constructor(
                     }
 
                     BackupSection.SOURCES -> sectionInput.readJsonArray<SourceBackup>(serializer()).restoreToDb("SOURCES") {
-                        getSourcesDao().upsert(it.toEntity())
+                        // JSON sources have no MangaSourceEntity row; only their lock is restored here.
+                        if (!it.source.startsWith("JSON_")) getSourcesDao().upsert(it.toEntity())
+                        when (it.lock) {
+                            SourceBackup.LOCK_ON -> sourceLocks.set(it.source, true)
+                            SourceBackup.LOCK_OFF -> sourceLocks.set(it.source, false)
+                            SourceBackup.LOCK_NONE -> sourceLocks.set(it.source, null)
+                            else -> Unit // old backup: keep the local lock
+                        }
                     }
 
                     BackupSection.SOURCE_ORIGINS -> sectionInput.readJsonArray<SourceOriginBackup>(serializer()).restoreToDb(
@@ -637,6 +686,11 @@ class BackupRepository @Inject constructor(
                     BackupSection.EXTENSION_REPOS -> sectionInput.readJsonArray<ExtensionRepoBackup>(serializer()).restoreToDb("EXTENSION_REPOS") {
                         getExternalExtensionRepoDao().upsert(it.toEntity())
                     }
+
+                    BackupSection.EXTENSION_GROUPS -> sectionInput.readJsonArray<SourceGroup>(serializer())
+                        .restoreWithoutTransaction("EXTENSION_GROUPS") {
+                            storeSourceGroup(it)
+                        }
 
                     BackupSection.SCROBBLING -> sectionInput.readJsonArray<ScrobblingBackup>(serializer()).restoreToDb("SCROBBLING") {
                         getScrobblingDao().upsert(it.toEntity())
@@ -979,6 +1033,9 @@ class BackupRepository @Inject constructor(
             if (BackupSection.SOURCE_ORIGINS in actOn) {
                 database.getSourceOriginsDao().deleteAll()
             }
+            if (BackupSection.EXTENSION_GROUPS in actOn) {
+                sourceGroupsDir().listFiles().orEmpty().forEach { it.delete() }
+            }
         }
     }
 
@@ -1135,6 +1192,27 @@ class BackupRepository @Inject constructor(
         flushBatch()
         Log.d(TAG, "restoreToDb: label=$label complete count=$processed totalMs=${SystemClock.elapsedRealtime() - startedAt}")
         return result
+    }
+
+    private fun sourceGroupsDir() = java.io.File(appContext.filesDir, "source_groups")
+
+    private fun readStoredSourceGroups(): List<SourceGroup> = sourceGroupsDir()
+        .listFiles { f -> f.isFile && f.extension == "json" }.orEmpty()
+        .filter { it.length() in 1..SOURCE_GROUP_MAX_BYTES }
+        .mapNotNull { file ->
+            runCatching { SourceGroupJson.decode(file.readText()) }.getOrNull()
+                ?.takeIf { it.isValid() && file.nameWithoutExtension == it.id }
+        }
+
+    /** Restores a group file; an existing group with the same id is kept (merge, never overwrite). */
+    private fun storeSourceGroup(group: SourceGroup) {
+        if (!group.isValid()) return
+        val dir = sourceGroupsDir().also { it.mkdirs() }
+        val target = java.io.File(dir, "${group.id}.json")
+        if (target.exists()) return
+        val temp = java.io.File(dir, "${group.id}.json.tmp")
+        temp.writeText(SourceGroupJson.encode(group))
+        check(temp.renameTo(target)) { "Cannot store source group ${group.id}" }
     }
 
     private suspend fun <T> Sequence<T>.restoreWithoutTransaction(

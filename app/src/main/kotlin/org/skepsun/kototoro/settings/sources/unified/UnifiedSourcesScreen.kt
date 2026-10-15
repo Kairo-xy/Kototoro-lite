@@ -248,9 +248,11 @@ fun UnifiedSourcesRoute(
     }
 
     fun confirmSetFilteredSourcesEnabled(enabled: Boolean) {
+        // Locked sources ignore bulk enable/disable, so they are neither counted nor confirmed.
         val sourceIds = (state as? UnifiedSourcesUiState.Ready)
             ?.sources
             .orEmpty()
+            .filter { it.lock == null }
             .mapTo(LinkedHashSet()) { it.id }
         if (sourceIds.isNotEmpty()) {
             activeDialog = UnifiedSourcesDialogState.SetFilteredSourcesEnabled(sourceIds, enabled)
@@ -380,6 +382,7 @@ fun UnifiedSourcesRoute(
             onAvailabilityFilterChange = viewModel::setAvailabilityFilter,
             onTestAvailabilityFilterChange = viewModel::setTestAvailabilityFilter,
             onNsfwFilterChange = viewModel::setNsfwFilter,
+            onLockFilterChange = viewModel::setLockFilter,
             onLocationTypeToggle = viewModel::toggleLocationType,
         )
     }

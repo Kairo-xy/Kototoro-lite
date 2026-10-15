@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import org.skepsun.kototoro.R
@@ -68,6 +69,8 @@ class SourceSettingsViewModel @Inject constructor(
     val browserUrl = MutableStateFlow<String?>(null)
     val isEnabled = mangaSourcesRepository.observeIsEnabled(source)
         .map<Boolean, Boolean?> { it }
+        .stateIn(viewModelScope, SharingStarted.Eagerly, null)
+    val lock = mangaSourcesRepository.observeLock(source)
         .stateIn(viewModelScope, SharingStarted.Eagerly, null)
     private val _jsAccountMeta = MutableStateFlow<JsContentRepository.JsAccountMeta?>(null)
     val jsAccountMeta: StateFlow<JsContentRepository.JsAccountMeta?> = _jsAccountMeta.asStateFlow()
@@ -259,6 +262,17 @@ class SourceSettingsViewModel @Inject constructor(
     fun setEnabled(value: Boolean) {
         launchJob(Dispatchers.Default) {
             mangaSourcesRepository.setSourcesEnabled(setOf(source), value)
+        }
+    }
+
+    /** Locks the source at its current enabled state, or unlocks it when it is already locked. */
+    fun toggleLock() {
+        launchJob(Dispatchers.Default) {
+            val current = mangaSourcesRepository.lockState(source.name)
+            // isEnabled.value is null until the first DB emission; never default to "on" (that locked disabled
+            // sources as enabled). Read the authoritative stored state instead.
+            val enabledNow = if (current == null) mangaSourcesRepository.observeIsEnabled(source).first() else null
+            mangaSourcesRepository.setSourceLock(source, enabledNow)
         }
     }
 
