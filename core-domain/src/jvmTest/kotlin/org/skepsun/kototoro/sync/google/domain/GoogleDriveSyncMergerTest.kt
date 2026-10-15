@@ -9,6 +9,7 @@ import org.skepsun.kototoro.sync.google.data.model.SyncFavourite
 import org.skepsun.kototoro.sync.google.data.model.SyncFavouriteCategory
 import org.skepsun.kototoro.sync.google.data.model.SyncFeedState
 import org.skepsun.kototoro.sync.google.data.model.SyncHistory
+import org.skepsun.kototoro.sync.google.data.model.SyncSourceState
 import org.skepsun.kototoro.sync.google.data.model.SyncTrackLog
 import org.skepsun.kototoro.sync.google.data.model.SyncTrack
 import org.skepsun.kototoro.sync.google.data.model.SyncWorkFavourite
@@ -215,6 +216,41 @@ class GoogleDriveSyncMergerTest {
 			.config!!.settings["theme"])
 		assertEquals("local", GoogleDriveSyncMerger.mergeSnapshots(local, configSnapshot(10, "remote"))
 			.config!!.settings["theme"])
+	}
+
+	@Test
+	fun `source enabled state follows the newest record when older local copy was enabled`() {
+		fun sourceSnapshot(enabled: Boolean, usedAt: Long) = GoogleDriveSyncSnapshot(
+			sourceStates = listOf(SyncSourceState(source = "SRC", isEnabled = enabled, usedAt = usedAt)),
+		)
+		val merged = GoogleDriveSyncMerger.mergeSnapshots(sourceSnapshot(true, 10L), sourceSnapshot(false, 20L))
+		assertEquals(false, merged.sourceStates.single().isEnabled)
+	}
+
+	@Test
+	fun `source enabled state follows the newest record when older copy was disabled`() {
+		fun sourceSnapshot(enabled: Boolean, usedAt: Long) = GoogleDriveSyncSnapshot(
+			sourceStates = listOf(SyncSourceState(source = "SRC", isEnabled = enabled, usedAt = usedAt)),
+		)
+		val merged = GoogleDriveSyncMerger.mergeSnapshots(sourceSnapshot(false, 10L), sourceSnapshot(true, 20L))
+		assertEquals(true, merged.sourceStates.single().isEnabled)
+	}
+
+	@Test
+	fun `source state follows the latest modification, not the latest use`() {
+		fun sourceSnapshot(enabled: Boolean, usedAt: Long, modifiedAt: Long) = GoogleDriveSyncSnapshot(
+			sourceStates = listOf(
+				SyncSourceState(source = "SRC", isEnabled = enabled, usedAt = usedAt, modifiedAt = modifiedAt),
+			),
+		)
+		// Device A used the source recently but changed its state long ago; device B disabled it later.
+		val deviceA = sourceSnapshot(enabled = true, usedAt = 1_000L, modifiedAt = 10L)
+		val deviceB = sourceSnapshot(enabled = false, usedAt = 5L, modifiedAt = 500L)
+		val merged = GoogleDriveSyncMerger.mergeSnapshots(deviceA, deviceB).sourceStates.single()
+		assertEquals(false, merged.isEnabled)
+		assertEquals(1_000L, merged.usedAt)
+		val mergedReverse = GoogleDriveSyncMerger.mergeSnapshots(deviceB, deviceA).sourceStates.single()
+		assertEquals(false, mergedReverse.isEnabled)
 	}
 
 	private fun snapshot(

@@ -550,13 +550,16 @@ class SyncSourceState(
     @SerialName("pinned") val isPinned: Boolean = false,
     @SerialName("sort_key") val sortKey: Int = 0,
     @SerialName("used_at") val usedAt: Long = 0L,
+    /** When enabled/pinned/sort state was last changed. 0 = unknown (snapshots from older versions). */
+    @SerialName("modified_at") val modifiedAt: Long = 0L,
 ) {
-    constructor(entity: MangaSourceEntity) : this(
+    constructor(entity: MangaSourceEntity, modifiedAt: Long = 0L) : this(
         source = entity.source,
         isEnabled = entity.isEnabled,
         isPinned = entity.isPinned,
         sortKey = entity.sortKey,
         usedAt = entity.lastUsedAt,
+        modifiedAt = modifiedAt,
     )
 }
 

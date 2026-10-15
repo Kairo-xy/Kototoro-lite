@@ -246,16 +246,22 @@ object GoogleDriveSyncMerger {
 
     private fun mergeSourceStates(items: List<SyncSourceState>): SyncSourceState {
         if (items.size == 1) return items.single()
-        val latest = items.maxByOrNull { it.usedAt } ?: items.first()
-        val anyEnabled = items.any { it.isEnabled }
-        val anyPinned = items.any { it.isPinned }
-        val maxSortKey = items.maxOf { it.sortKey }
+        // The state (enabled/pinned/sort) of the most recently modified record wins; usage time is not a
+        // modification time. Equal or missing modification times fall back to usedAt, then to the later record.
+        val latest = items.reduce { acc, item ->
+            when {
+                item.modifiedAt != acc.modifiedAt -> if (item.modifiedAt > acc.modifiedAt) item else acc
+                item.usedAt >= acc.usedAt -> item
+                else -> acc
+            }
+        }
         return SyncSourceState(
             source = latest.source,
-            isEnabled = anyEnabled,
-            isPinned = anyPinned,
-            sortKey = maxSortKey,
-            usedAt = latest.usedAt,
+            isEnabled = latest.isEnabled,
+            isPinned = latest.isPinned,
+            sortKey = latest.sortKey,
+            usedAt = items.maxOf { it.usedAt },
+            modifiedAt = latest.modifiedAt,
         )
     }
 

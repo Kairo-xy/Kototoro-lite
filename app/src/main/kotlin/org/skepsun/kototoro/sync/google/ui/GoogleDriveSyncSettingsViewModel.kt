@@ -10,6 +10,7 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,6 +24,7 @@ import org.skepsun.kototoro.sync.google.domain.GoogleDriveSyncRepository
 import org.skepsun.kototoro.sync.google.domain.GoogleDriveSyncResult
 import org.skepsun.kototoro.sync.google.work.GoogleDriveSyncWorker
 import org.skepsun.kototoro.core.prefs.AppSettings
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.inject.Inject
 
 data class GoogleDriveSyncUiState(
@@ -33,10 +35,12 @@ data class GoogleDriveSyncUiState(
     val intervalMinutes: Int = GoogleDriveSyncSettings.DEFAULT_INTERVAL_MINUTES,
     val isWifiOnly: Boolean = false,
     val isSyncOnStart: Boolean = true,
+    val isSettingsSyncEnabled: Boolean = true,
     val lastSyncTimestamp: Long = 0L,
     val lastError: String? = null,
     val isDirty: Boolean = false,
     val isSyncing: Boolean = false,
+    val syncStage: String? = null,
 )
 
 @HiltViewModel
@@ -53,11 +57,14 @@ class GoogleDriveSyncSettingsViewModel @Inject constructor(
     val uiState: StateFlow<GoogleDriveSyncUiState> = _uiState.asStateFlow()
     private val _authorizationRequests = MutableSharedFlow<PendingIntent>(extraBufferCapacity = 1)
     val authorizationRequests: SharedFlow<PendingIntent> = _authorizationRequests.asSharedFlow()
+    private val isDeletingRemoteData = AtomicBoolean(false)
+    private val isImportingLegacyData = AtomicBoolean(false)
 
     init {
         viewModelScope.launch {
-            repository.isSyncing.collect { syncing ->
-                _uiState.value = readState().copy(isSyncing = syncing)
+            // Also fires refresh() on every isSyncing true->false transition, so worker-driven runs update lastError/lastSync.
+            combine(repository.isSyncing, repository.syncStage) { syncing, stage -> syncing to stage }.collect { (syncing, stage) ->
+                _uiState.value = readState().copy(isSyncing = syncing, syncStage = stage)
             }
         }
         viewModelScope.launch {
@@ -66,6 +73,7 @@ class GoogleDriveSyncSettingsViewModel @Inject constructor(
                 GoogleDriveSyncSettings.KEY_INTERVAL_MINUTES,
                 GoogleDriveSyncSettings.KEY_WIFI_ONLY,
                 GoogleDriveSyncSettings.KEY_SYNC_ON_START,
+                GoogleDriveSyncSettings.KEY_SETTINGS_SYNC_ENABLED,
             ).collect {
                 refresh()
             }
@@ -74,6 +82,7 @@ class GoogleDriveSyncSettingsViewModel @Inject constructor(
 
     fun syncNow() {
         if (!settings.isSyncEnabled) {
+            settings.lastSyncError = context.getString(R.string.sync_enable_required)
             refresh()
             return
         }
@@ -81,14 +90,14 @@ class GoogleDriveSyncSettingsViewModel @Inject constructor(
             requestSignIn()
             return
         }
-        viewModelScope.launch(Dispatchers.Default) {
-            handleSyncResult(repository.sync())
-            refresh()
-        }
+        // Runs in WorkManager so it survives leaving the screen; state comes back through isSyncing/syncStage.
+        scheduler.enqueueManual()
+        refresh()
     }
 
     fun deleteRemoteData() {
         if (!settings.isSyncEnabled) {
+            settings.lastSyncError = context.getString(R.string.sync_enable_required)
             refresh()
             return
         }
@@ -96,14 +105,20 @@ class GoogleDriveSyncSettingsViewModel @Inject constructor(
             requestSignIn()
             return
         }
+        if (!isDeletingRemoteData.compareAndSet(false, true)) return
         viewModelScope.launch(Dispatchers.Default) {
-            handleSyncResult(repository.deleteRemoteData())
-            refresh()
+            try {
+                handleSyncResult(repository.deleteRemoteData())
+            } finally {
+                isDeletingRemoteData.set(false)
+                refresh()
+            }
         }
     }
 
     fun importLegacyRemoteData() {
         if (!settings.isSyncEnabled) {
+            settings.lastSyncError = context.getString(R.string.sync_enable_required)
             refresh()
             return
         }
@@ -111,9 +126,14 @@ class GoogleDriveSyncSettingsViewModel @Inject constructor(
             requestSignIn()
             return
         }
+        if (!isImportingLegacyData.compareAndSet(false, true)) return
         viewModelScope.launch(Dispatchers.Default) {
-            handleSyncResult(repository.importLegacyRemoteData())
-            refresh()
+            try {
+                handleSyncResult(repository.importLegacyRemoteData())
+            } finally {
+                isImportingLegacyData.set(false)
+                refresh()
+            }
         }
     }
 
@@ -199,6 +219,11 @@ class GoogleDriveSyncSettingsViewModel @Inject constructor(
         refresh()
     }
 
+    fun setSettingsSyncEnabled(value: Boolean) {
+        settings.isSettingsSyncEnabled = value
+        refresh()
+    }
+
     fun setEnabled(value: Boolean) {
         settings.isSyncEnabled = value
         viewModelScope.launch(Dispatchers.Default) {
@@ -257,9 +282,11 @@ class GoogleDriveSyncSettingsViewModel @Inject constructor(
         intervalMinutes = settings.intervalMinutes,
         isWifiOnly = settings.isWifiOnly,
         isSyncOnStart = settings.isSyncOnStart,
+        isSettingsSyncEnabled = settings.isSettingsSyncEnabled,
         lastSyncTimestamp = settings.lastSyncTimestamp,
         lastError = settings.lastSyncError,
         isDirty = settings.isDirty,
         isSyncing = repository.isSyncing.value,
+        syncStage = repository.syncStage.value,
     )
 }
