@@ -131,11 +131,9 @@ android {
 	packaging {
 		jniLibs {
 			useLegacyPackaging = true
+			// This fork packages arm64-v8a only; retain only the matching QuickJS collision rule.
 			pickFirsts += [
 				'lib/arm64-v8a/libquickjs.so',
-				'lib/armeabi-v7a/libquickjs.so',
-				'lib/x86/libquickjs.so',
-				'lib/x86_64/libquickjs.so',
 				'**/libc++_shared.so'
 			]
 		}
