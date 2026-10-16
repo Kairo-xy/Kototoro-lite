@@ -89,14 +89,6 @@ class ReaderSuperResolutionManager @Inject constructor(
                 if (!isActive) return@withLock null
                 initEngineIfNeeded(modelId)
 
-                // Decode only dimensions first to check size limits
-                val boundsOpts = BitmapFactory.Options().apply {
-                    inJustDecodeBounds = true
-                }
-                BitmapFactory.decodeFile(originalFile.absolutePath, boundsOpts)
-
-                val inputPixels = boundsOpts.outWidth.toLong() * boundsOpts.outHeight.toLong()
-
                 // Force ARGB_8888 — BitmapFactory might pick RGB_565 for JPEGs
                 // on some devices, which breaks the native 4-byte-per-pixel assumption.
                 val decodeOpts = BitmapFactory.Options().apply {
@@ -136,7 +128,7 @@ class ReaderSuperResolutionManager @Inject constructor(
                 manageCache(cacheLimitMb)
                 return@withContext outputFile.toUri()
             } catch (e: Exception) {
-                Log.e(TAG, "NCNN SR Processing Save failed", e)
+                Log.e(TAG, "Image enhancement save failed", e)
                 outputFile.delete()
             } finally {
                 resultBitmap.recycle()
