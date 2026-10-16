@@ -1,6 +1,8 @@
 name: Kototoro Lite Android build
 
 # Build both variants so CI measures the installable, shrink-optimized release APK too.
+# Debug and release compile in separate Gradle runs: compiling both at once exhausted the
+# Kotlin compiler heap (OutOfMemoryError: GC overhead limit exceeded) on the CI runner.
 
 on:
   push:
@@ -22,7 +24,7 @@ jobs:
   assemble-apks:
     name: Assemble ARM64 debug and release APKs
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -39,8 +41,18 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
-      - name: Assemble debug and minified release APKs
-        run: ./gradlew --no-daemon :app:assembleDebug :app:assembleRelease
+      - name: Assemble debug APK
+        run: ./gradlew --no-daemon --no-parallel :app:assembleDebug
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kototoro-lite-arm64-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
+      - name: Assemble minified release APK
+        run: ./gradlew --no-daemon --no-parallel :app:assembleRelease
       - name: Verify native libraries match ARM64 target
         if: success()
         shell: bash
@@ -96,13 +108,11 @@ jobs:
             du -h "$apk"
             sha256sum "$apk"
           done
-      - name: Upload debug and release APKs
+      - name: Upload release APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: kototoro-lite-arm64-apks
-          path: |
-            app/build/outputs/apk/debug/*.apk
-            app/build/outputs/apk/release/*.apk
+          name: kototoro-lite-arm64-release
+          path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 7
