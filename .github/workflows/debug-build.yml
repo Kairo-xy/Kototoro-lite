@@ -2,6 +2,12 @@ name: Debug Build (arm64-v8a)
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - chatgpt/kototoro-lite-first-pass
+  pull_request:
+    branches:
+      - devel
 
 jobs:
   build:
