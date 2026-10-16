@@ -1,0 +1,73 @@
+name: Kototoro Lite release
+
+# Builds the ARM64 APK and attaches it to a GitHub Release.
+# - Push a tag like `lite-v0.1.0` to publish from that commit, or
+# - run manually from the Actions tab and enter a tag name
+#   (manual runs only appear in the UI once this file is on the default branch).
+# The `lite-v*` prefix keeps this separate from the upstream `v*` release workflows.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to create (e.g. lite-v0.1.0)'
+        required: true
+        default: 'lite-v0.1.0'
+  push:
+    tags:
+      - 'lite-v*'
+
+permissions:
+  contents: write
+
+jobs:
+  publish-apk:
+    name: Build and publish ARM64 APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools'
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Make Gradle wrapper executable
+        run: chmod +x ./gradlew
+      - name: Assemble debug APK
+        run: ./gradlew --no-daemon :app:assembleDebug
+      - name: Prepare release files
+        shell: bash
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/debug/*.apk)
+          if (( ${#apks[@]} == 0 )); then
+            echo 'No debug APK was produced.' >&2
+            exit 1
+          fi
+          mkdir -p release-files
+          cp "${apks[0]}" "release-files/kototoro-lite-${TAG}-arm64-debug.apk"
+          (cd release-files && sha256sum ./*.apk | tee SHA256SUMS.txt)
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" release-files/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Kototoro Lite $TAG" \
+            --notes "ARM64 build of Kototoro Lite, signed with the debug key (not a Play Store build). Installs alongside the original app as org.skepsun.kototoro.debug. SHA-256 checksums are in SHA256SUMS.txt." \
+            --prerelease
