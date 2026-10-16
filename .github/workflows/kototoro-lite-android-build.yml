@@ -49,6 +49,57 @@ jobs:
       - name: Assemble debug APK
         run: ./gradlew --no-daemon :app:assembleDebug
 
+      - name: Verify native libraries match ARM64 target
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/debug/*.apk)
+          if (( ${#apks[@]} == 0 )); then
+            echo 'No debug APK was produced.' >&2
+            exit 1
+          fi
+          for apk in "${apks[@]}"; do
+            echo "Checking native libraries in $apk"
+            native_entries="$(unzip -Z1 "$apk" | grep -E '^lib/[^/]+/[^/]+\.so        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/debug/*.apk)
+          if (( \${#apks[@]} == 0 )); then
+            echo 'No debug APK was produced.' >&2
+            exit 1
+          fi
+          for apk in \"\${apks[@]}\"; do
+            echo \"APK: $apk\"
+            du -h \"$apk\"
+            sha256sum \"$apk\"
+          done
+
+      - name: Upload debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: kototoro-lite-arm64-debug
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+          retention-days: 7
+ || true)"
+            if [[ -z "$native_entries" ]]; then
+              echo "No packaged native libraries found; skipping ABI assertion for $apk."
+              continue
+            fi
+            printf '%s\n' "$native_entries"
+            unexpected="$(printf '%s\n' "$native_entries" | grep -v '^lib/arm64-v8a/' || true)"
+            if [[ -n "$unexpected" ]]; then
+              echo "Unexpected non-ARM64 native libraries found:" >&2
+              printf '%s\n' "$unexpected" >&2
+              exit 1
+            fi
+          done
+
       - name: Report APK size and checksum
         if: success()
         shell: bash
