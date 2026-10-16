@@ -20,7 +20,7 @@ composeCompiler {
 	stabilityConfigurationFiles.add(layout.projectDirectory.file('compose-stability.conf'))
 }
 
-def allAbiFilters = ['arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86']
+def allAbiFilters = ['arm64-v8a'] // Kototoro Lite: target modern 64-bit Android devices
 def requestedTaskNames = gradle.startParameter.taskNames.collect { it.toLowerCase(Locale.ROOT) }
 def debugOnlyAbiBuild = !requestedTaskNames.isEmpty() &&
 	requestedTaskNames.any { it.contains('debug') } &&
