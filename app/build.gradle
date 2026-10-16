@@ -76,18 +76,6 @@ android {
 			?: 'demo_app_secret').toString()
 		buildConfigField 'String', 'DANDANPLAY_APP_ID', "\"${dandanAppId}\""
 		buildConfigField 'String', 'DANDANPLAY_APP_SECRET', "\"${dandanAppSecret}\""
-		externalNativeBuild {
-			cmake {
-				cppFlags ""
-				abiFilters(*activeAbiFilters)
-			}
-		}
-	}
-	externalNativeBuild {
-		cmake {
-			path "src/main/cpp/CMakeLists.txt"
-			version "3.22.1"
-		}
 	}
 	buildTypes {
 		debug {
@@ -584,7 +572,6 @@ dependencies {
 	implementation libs.cryptography.core
 	implementation libs.cryptography.provider.optimal
 	implementation libs.djl.sentencepiece
-	implementation 'com.github.akari39:RealCUGAN-ncnn-Android:1.1'
 
 	implementation libs.acra.dialog
 
