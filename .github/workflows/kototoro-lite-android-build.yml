@@ -100,6 +100,20 @@ jobs:
             fi
           done
 
+      - name: Summarize largest APK entries
+        if: success()
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          apks=(app/build/outputs/apk/debug/*.apk)
+          for apk in "${apks[@]}"; do
+            echo "Largest entries in $apk (uncompressed sizes):"
+            unzip -l "$apk" | awk 'NF >= 4 && $1 ~ /^[0-9]+$/ { name=$4; size=$1; if (name !~ /^Archive:/ && name != "Name") print size "\t" name }' | sort -nr | head -n 30
+            echo "Native library totals by ABI:"
+            unzip -l "$apk" | awk 'NF >= 4 && $1 ~ /^[0-9]+$/ && $4 ~ /^lib\/[^/]+\/[^/]+\.so$/ { split($4,a,"/"); total[a[2]] += $1 } END { for (abi in total) printf "%s\t%d bytes\n", abi, total[abi] }' | sort
+          done
+
       - name: Report APK size and checksum
         if: success()
         shell: bash
