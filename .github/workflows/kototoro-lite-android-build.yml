@@ -1,5 +1,7 @@
 name: Kototoro Lite Android build
 
+# Build both variants so CI measures the installable, shrink-optimized release APK too.
+
 on:
   push:
     branches:
@@ -18,7 +20,7 @@ concurrency:
 
 jobs:
   assemble-debug:
-    name: Assemble ARM64 debug APK
+    name: Assemble ARM64 debug and release APKs
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -37,15 +39,15 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
-      - name: Assemble debug APK
-        run: ./gradlew --no-daemon :app:assembleDebug
+      - name: Assemble debug and minified release APKs
+        run: ./gradlew --no-daemon :app:assembleDebug :app:assembleRelease
       - name: Verify native libraries match ARM64 target
         if: success()
         shell: bash
         run: |
           set -euo pipefail
           shopt -s nullglob
-          apks=(app/build/outputs/apk/debug/*.apk)
+          apks=(app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk)
           if (( ${#apks[@]} == 0 )); then
             echo 'No debug APK was produced.' >&2
             exit 1
@@ -94,11 +96,13 @@ jobs:
             du -h "$apk"
             sha256sum "$apk"
           done
-      - name: Upload debug APK
+      - name: Upload debug and release APKs
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: kototoro-lite-arm64-debug
-          path: app/build/outputs/apk/debug/*.apk
+          name: kototoro-lite-arm64-apks
+          path: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
           if-no-files-found: error
           retention-days: 7
