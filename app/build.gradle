@@ -106,7 +106,9 @@ android {
 			enable true
 			reset()
 			include(*activeAbiFilters)
-			universalApk !debugOnlyAbiBuild
+			// Kototoro Lite ships ARM64 only: a universal APK would bundle every ABI
+			// (x86, x86_64, armeabi-v7a) from third-party native libraries.
+			universalApk false
 		}
 	}
 	buildFeatures {
