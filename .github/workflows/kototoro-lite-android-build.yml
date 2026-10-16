@@ -3,6 +3,7 @@ name: Kototoro Lite Android build
 # Build both variants so CI measures the installable, shrink-optimized release APK too.
 # Debug and release compile in separate Gradle runs: compiling both at once exhausted the
 # Kotlin compiler heap (OutOfMemoryError: GC overhead limit exceeded) on the CI runner.
+# The release APK is signed when the RELEASE_* repository secrets exist; otherwise it stays unsigned.
 
 on:
   push:
@@ -51,6 +52,29 @@ jobs:
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 7
+      - name: Prepare release signing (if secrets are set)
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${KEYSTORE_BASE64:-}" || -z "${STORE_PASSWORD:-}" || -z "${KEY_ALIAS:-}" || -z "${KEY_PASSWORD:-}" ]]; then
+            echo 'Signing secrets are not available; the release APK will be unsigned.'
+            exit 0
+          fi
+          keystore="$RUNNER_TEMP/kototoro-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$keystore"
+          keytool -list -keystore "$keystore" -storepass:env STORE_PASSWORD -alias "$KEY_ALIAS" > /dev/null
+          {
+            echo "ORG_GRADLE_PROJECT_RELEASE_STORE_FILE=$keystore"
+            echo "ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD=$STORE_PASSWORD"
+            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS=$KEY_ALIAS"
+            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+          echo 'Release signing configured.'
       - name: Assemble minified release APK
         run: ./gradlew --no-daemon --no-parallel :app:assembleRelease
       - name: Verify native libraries match ARM64 target

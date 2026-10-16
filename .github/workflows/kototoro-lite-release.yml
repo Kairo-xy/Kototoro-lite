@@ -1,10 +1,12 @@
 name: Kototoro Lite release
 
-# Builds the ARM64 APK and attaches it to a GitHub Release.
+# Builds the signed ARM64 release APK and attaches it to a GitHub Release.
 # - Push a tag like `lite-v0.1.0` to publish from that commit, or
 # - run manually from the Actions tab and enter a tag name
 #   (manual runs only appear in the UI once this file is on the default branch).
-# The `lite-v*` prefix keeps this separate from the upstream `v*` release workflows.
+# Requires the RELEASE_KEYSTORE_BASE64, RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS and
+# RELEASE_KEY_PASSWORD repository secrets. The `lite-v*` prefix keeps this separate from
+# the upstream `v*` release workflows.
 
 on:
   workflow_dispatch:
@@ -22,9 +24,9 @@ permissions:
 
 jobs:
   publish-apk:
-    name: Build and publish ARM64 APK
+    name: Build and publish signed ARM64 APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Check out source
         uses: actions/checkout@v4
@@ -41,8 +43,30 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
-      - name: Assemble debug APK
-        run: ./gradlew --no-daemon :app:assembleDebug
+      - name: Prepare release signing
+        shell: bash
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${KEYSTORE_BASE64:-}" || -z "${STORE_PASSWORD:-}" || -z "${KEY_ALIAS:-}" || -z "${KEY_PASSWORD:-}" ]]; then
+            echo 'Missing signing secrets. Add RELEASE_KEYSTORE_BASE64, RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS and RELEASE_KEY_PASSWORD.' >&2
+            exit 1
+          fi
+          keystore="$RUNNER_TEMP/kototoro-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | tr -d '[:space:]' | base64 -d > "$keystore"
+          keytool -list -keystore "$keystore" -storepass:env STORE_PASSWORD -alias "$KEY_ALIAS" > /dev/null
+          {
+            echo "ORG_GRADLE_PROJECT_RELEASE_STORE_FILE=$keystore"
+            echo "ORG_GRADLE_PROJECT_RELEASE_STORE_PASSWORD=$STORE_PASSWORD"
+            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_ALIAS=$KEY_ALIAS"
+            echo "ORG_GRADLE_PROJECT_RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+      - name: Assemble signed release APK
+        run: ./gradlew --no-daemon --no-parallel :app:assembleRelease
       - name: Prepare release files
         shell: bash
         env:
@@ -50,13 +74,17 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          apks=(app/build/outputs/apk/debug/*.apk)
-          if (( ${#apks[@]} == 0 )); then
-            echo 'No debug APK was produced.' >&2
+          apks=(app/build/outputs/apk/release/*.apk)
+          if (( ${#apks[@]} != 1 )); then
+            echo "Expected exactly one release APK, found ${#apks[@]}: ${apks[*]:-none}" >&2
+            exit 1
+          fi
+          if [[ "${apks[0]}" == *unsigned* ]]; then
+            echo "Release APK is unsigned: ${apks[0]}" >&2
             exit 1
           fi
           mkdir -p release-files
-          cp "${apks[0]}" "release-files/kototoro-lite-${TAG}-arm64-debug.apk"
+          cp "${apks[0]}" "release-files/kototoro-lite-${TAG}-arm64.apk"
           (cd release-files && sha256sum ./*.apk | tee SHA256SUMS.txt)
       - name: Create GitHub Release
         shell: bash
@@ -69,5 +97,5 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "Kototoro Lite $TAG" \
-            --notes "ARM64 build of Kototoro Lite, signed with the debug key (not a Play Store build). Installs alongside the original app as org.skepsun.kototoro.debug. SHA-256 checksums are in SHA256SUMS.txt." \
+            --notes "ARM64 release build of Kototoro Lite, signed with the project's own key. Installs as org.skepsun.kototoro (the same id as the original app, so it will not install over a copy signed with a different key). SHA-256 checksum is in SHA256SUMS.txt." \
             --prerelease
