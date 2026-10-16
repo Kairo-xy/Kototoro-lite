@@ -52,8 +52,8 @@ internal class TsukiContentParserAdapter(
     override val availableSortOrders: Set<SortOrder> = delegate.availableSortOrders.mapTo(linkedSetOf()) { it.toKototoro() }
     override val filterCapabilities: ContentListFilterCapabilities get() = delegate.filterCapabilities.toKototoro()
     override val configKeyDomain: ConfigKey.Domain get() = ConfigKey.Domain(*delegate.configKeyDomain.presetValues)
-    override val authorizationProvider: ContentParserAuthProvider? =
-        (delegate as? tsuki.MangaParserAuthProvider)?.let(::TsukiAuthProviderAdapter)
+    override val authorizationProvider: ContentParserAuthProvider?
+        get() = delegate.authorizationProvider?.let(::TsukiAuthProviderAdapter)
 
     override suspend fun getList(offset: Int, order: SortOrder, filter: ContentListFilter): List<Content> =
         withTsukiExceptions(source) {

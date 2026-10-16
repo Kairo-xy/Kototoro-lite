@@ -137,15 +137,25 @@ class IosSourcesTest {
         val runtime = IosSources(object : IosSourceTransport {
             override fun exchange(requestJson: String): String {
                 val request = SourceProtocolJson.decodeFromString<SourceRequest>(requestJson)
-                check(request.call is SourceCall.Cover)
-                val result = SourceResult.Cover(SourceCoverArtifact(answer, content.id, "$hash.img", hash, 123, "image/png"))
+                val result = when (request.call) {
+                    is SourceCall.Cover -> SourceResult.Cover(
+                        SourceCoverArtifact(answer, content.id, "$hash.img", hash, 123, "image/png"),
+                    )
+                    is SourceCall.Image -> SourceResult.Image(
+                        SourceImageArtifact(answer, page.id, "$hash.img", hash, 123, "image/png"),
+                    )
+                    else -> error("Unexpected call")
+                }
                 return SourceProtocolJson.encodeToString(SourceResponse(1, request.requestId, result))
             }
             override fun close() {}
         })
         assertEquals(IosSourceImage("$hash.img", hash, 123), runtime.cover(IosSourceContent(stored)))
+        val storedPage = IosSourcePage(page.copy(source = stored.source))
+        assertEquals(IosSourceImage("$hash.img", hash, 123), runtime.image(storedPage))
         answer = source.copy(name = "MIHON_1")
         assertFailsWith<IllegalStateException> { runtime.cover(IosSourceContent(stored)) }
+        assertFailsWith<IllegalStateException> { runtime.image(storedPage) }
         Unit
     }
 

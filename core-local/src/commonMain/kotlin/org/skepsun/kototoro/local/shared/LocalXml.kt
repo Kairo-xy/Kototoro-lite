@@ -23,8 +23,8 @@ internal object LocalXml {
 
     /** Text inside each `<name>…</name>` (tags inside it removed), in document order. */
     fun texts(xml: String, name: String): List<String> {
-        val pattern = Regex("<(?:[\\w.-]+:)?$name(?:\\s[^>]*)?>(.*?)</(?:[\\w.-]+:)?$name\\s*>",
-            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val pattern = Regex("<(?:[\\w.-]+:)?$name(?:\\s[^>]*)?>([\\s\\S]*?)</(?:[\\w.-]+:)?$name\\s*>",
+            RegexOption.IGNORE_CASE)
         return pattern.findAll(xml).map { text(it.groupValues[1]) }.filter { it.isNotEmpty() }.toList()
     }
 

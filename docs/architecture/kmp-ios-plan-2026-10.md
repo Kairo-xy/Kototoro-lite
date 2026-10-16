@@ -6132,3 +6132,98 @@ UI（真实扩展预览）新增 `SourceRuntimeTests.testReopenedLongChapterList
 - 新 Windows 便携包的 `windowsDistributionTest` 1 项通过，含随包原生窗口/运行时检查；
   连同前述测试共 37 项通过。隔离目录再次通过实际主页鼠标测试，已检查 ZIP 内含共享鼠标手势类。
   打包日志为 `mouse-scroll-package.log`。
+
+## 124. iOS JAR 来源账号与设置链路修复（2026-10-16）
+
+**根因与行为**
+
+- JAR 工厂返回的 `ContentParserWrapper` 不实现登录接口，但通过 `authorizationProvider` 转发它。
+  `ParserPreferences` 原先直接转换 parser，导致账号状态、用户名、密码和登录按钮整体缺失。
+  读取账号能力与执行登录现在都使用同一 `authorizationProvider`。
+- Kotatsu 适配器补充授权提供者转发；Tsuki 改用其声明的 `authorizationProvider`，支持独立提供者与包装器。
+  Kotatsu 的 `DisableUpdateChecking` 配置不再被适配器丢弃，映射为现有共享 Toggle 控件。
+- 登录错误与实际会话状态分别展示；状态查询失败显示“无法确认”，取消继续传播。
+  密码提交保留原字符串；凭据更新验证类型和来源能力，并如实返回磁盘保存失败。
+  来源异常的原始消息不放入账号设置，避免错误消息携带凭据或响应令牌。
+- 原“退出登录”只删除保存的密码，无法撤销 Cookie 或来源内存中的令牌。
+  该操作改为“清除已保存的密码”，明确保留站点会话，不伪造退出成功。
+- 账号分组增加网页登录入口，使用提供者的完整 HTTP(S) 登录地址。
+  `SourcePreferenceNode.actionUrl` 是有默认值的可选字段，Swift 直接打开网页；Windows 共用消费方也接入该字段。
+  浏览器读取来源运行时实际 User-Agent，完成 Cookie 回写并关闭后重新加载账号状态。
+
+**同时修复的设置缺陷**
+
+- Swift 设置列表、编辑定位和 User-Agent 查找支持完整的可见嵌套分组。
+  文本编辑页保留通用键盘，并在面板内部显示保存失败；提交期间禁止重复保存和关闭编辑页。
+- 设置提交在 iOS 界面和 parser host 内串行，避免同一 revision 被并发消费。
+  host 将设置绑定到 parser 实例，插件更新后的旧屏幕不能继续执行已退役插件的登录动作。
+  列表、正文和图片读取不加入该设置锁。
+- 多选控件保存成功后更新勾选；拒绝或失败时不显示虚假的成功状态。
+- JAR 域名预设增加“自定义域名”入口，保存后可显示不在预设内的当前值。
+  域名验证拒绝 URL 用户信息、查询、片段与反斜杠，继续接受主机和端口。
+- 设置变更或导入 Cookie 后失效该来源的描述和筛选缓存；域名编辑后刷新设置页的浏览器地址。
+  CMS 的浏览器地址直接使用已更新的站点设置。设置加载失败可重试或下拉刷新。
+
+**编译中发现的共享代码问题**
+
+- `core-local/commonMain` 原先直接使用 `FileSystem.SYSTEM`，公共元数据编译失败。
+  通过同一 `expect/actual` 属性提供 JVM/iOS 系统文件接口，保留构造参数与调用方式。
+- EPUB 正文、目录和 XML 文本匹配使用 `[\s\S]` 保留跨行匹配，移除公共层不可用的
+  `RegexOption.DOT_MATCHES_ALL`；平台差异见
+  [Kotlin RegexOption 官方文档](https://kotlinlang.org/api/core/kotlin-stdlib/kotlin.text/-regex-option/)。
+
+**验证边界**
+
+- 本轮遵照要求只执行 Gradle 编译和代码阅读，没有运行测试、来源登录请求、模拟器或设备。
+- 新增 `ParserAuthPreferencesTest` 八项用例，覆盖包装器和 JSON 边界、三类 parser 授权、
+  特殊配置控件、参数类型、保存失败、密码空白、重新登录失败后的会话状态、取消与错误脱敏、
+  域名校验，以及插件更新后拒绝旧屏幕；只确认测试源码编译，不宣称行为测试通过。
+- `:parser-host:compileKotlin`、`:parser-host:compileTestKotlin`、三类 `compileFixture*Kotlin`、
+  `:source-host:compileTestKotlin`、`:core-source:compileCommonMainKotlinMetadata` / `compileTestKotlinJvm`、
+  `:core-local:compileCommonMainKotlinMetadata` / `compileTestKotlinJvm`、
+  `:ios-shared:compileIosMainKotlinMetadata`、`:app:compileDebugKotlin` 通过。
+- Windows 共享消费方 `:desktop-app:compileKotlin` 通过，使用既有固定兼容 API 与 Java 25 配置。
+  最终聚合编译记录位于忽略的 `build/reports/ios-source-settings-compile.log`。
+- SwiftUI 仅经代码阅读；Windows 上的 iOS Kotlin 元数据编译不替代 Xcode 编译、framework 链接或 UI 验证。
+  没有新增依赖、修改 parser 外部 ABI、提交代码或推送。
+
+## 125. iOS 浏览、筛选缓存、相关推荐与下载身份续查（2026-10-16）
+
+继续沿来源请求、界面状态和下载持久化链路进行代码审查，修复以下问题：
+
+| 触发场景 | 原问题与修复 |
+| --- | --- |
+| OFFSET 来源的分页结果存在重复项 | 下一页曾使用去重后卡片数作为偏移；现在累计来源实际返回的条目数，同一页内也去重，失败重试不推进偏移。 |
+| 多标签或默认开启的动态标签 | “全部”曾因 `selectedCategory == nil` 提前返回；现在按控件初值生成明确的忽略/关闭值，并按实际包含、排除状态同步高亮。 |
+| 修改来源设置后回到浏览页 | 原列表与筛选定义一直保留；设置变更或浏览器回写 Cookie 后通知浏览页，关闭设置面板时重载，并保留仍有效的条件。 |
+| 设置改变可用标签或动态选项 | 草稿曾继续持有失效的键与索引；现在根据新面板核对标签、枚举、语言、能力和原生控件值。 |
+| 缓存失效后继续按标签/动态控件浏览 | 缺少面板时 `toFilter` 会丢弃所有关联条件；现在先重载所需面板。不能组合搜索与筛选的来源仍直接执行搜索，不额外依赖面板。 |
+| 已声明动态筛选但读取失败 | 原异常被吞掉，界面退回不完整的标签投影；现在显示可重试错误，避免把故障伪装成来源没有这些控件。 |
+| 描述或筛选请求跨越缓存失效 | 旧请求曾能重新填入旧缓存；现在发布时核对版本，失效后重新读取。CMS 设置更新也走同一缓存失效入口。 |
+| 详情刷新、换源与旧请求交错 | 刷新与首次加载共用请求身份；换源清空旧推荐并失效请求，旧结果和旧错误不会覆盖新页面。 |
+| 相关推荐回退搜索 | 从 `page: 1` 改为协议的首页 `page: 0`；加入取消/请求检查、去重，并按来源区分相同 ID 或相对 URL。 |
+| 来源描述变化后恢复阅读页或加入下载 | 图片产物及作品/章节来源曾比较整个 `SourceRef`，语言等描述差异会被误判为身份不符；改为校验稳定来源名称，图片继续验证页面 ID，保留原始请求字段。 |
+| 不同来源具有相同作品 ID | 作品集合的网格、列表及搜索卡片改用现有 `ContentMarks.key` 作为渲染身份；展示、回调和辅助功能标识仍沿用原值。 |
+| 搜索结果重复或本地删除失败 | 搜索结果去重并使用统一来源错误文案；删除失败不再被 `try?` 吞掉，浏览页的操作提示集中到一个弹窗入口。 |
+
+实现继续复用现有来源协议、原生控件转换、`ContentMarks.key` 和存储，不增加运行依赖、数据库迁移或平行状态仓库。
+
+**编译与回归源码检查**
+
+- `:ios-shared:compileIosMainKotlinMetadata` 通过，日志为忽略的
+  `build/reports/ios-source-followup-compile.log`（147 个任务，17 执行、130 已是最新）。
+- 新增 `IosSourceCacheTest` 五项用例：Cookie 失效后重载标签面板、不支持组合筛选时独立搜索、
+  动态控件加载失败向上传播，以及描述/面板请求跨越失效时拒绝旧缓存写回。
+  `IosSourcesTest` 与 `IosProductTest` 扩展图片与下载的来源描述差异检查，并保留跨来源拒绝检查。
+- 为在 Windows 检查 iOS 测试源码，临时 init script 等待 `projectsEvaluated`，将
+  `src/iosTest/kotlin` 加入本次 `iosMain` 元数据编译，并加入同版本的 `kotlin-test:2.4.0` 编译依赖。
+  全部 iOS 主代码与测试源码的元数据编译通过；正式构建文件未改，随后再次执行正常主代码编译以恢复输出。
+
+```powershell
+./gradlew.bat --init-script "build/reports/ios-test-metadata.init.gradle" `
+    :ios-shared:compileIosMainKotlinMetadata --no-configuration-cache --console=plain
+./gradlew.bat :ios-shared:compileIosMainKotlinMetadata --console=plain
+```
+
+init script 是本地忽略的编译辅助文件，不随应用发布。以上检查没有执行测试、网络来源请求或本地文件删除。
+SwiftUI 仅经代码阅读，尚未经过 Swift/Xcode 编译、framework 链接或设备 UI 验证；没有提交或推送。

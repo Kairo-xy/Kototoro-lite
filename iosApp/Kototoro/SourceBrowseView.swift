@@ -24,8 +24,22 @@ final class SourceBrowseModel: ObservableObject {
     let runtime: IosSources
     let source: IosSource
     private var page: Int32 = 0
+    /// Offset-based sources count every returned entry, including overlapping and repeated entries.
+    private var loadedCount: Int32 = 0
     private var activeQuery: String?
     private var generation = UUID()
+    private var panelRequest: UUID?
+
+    var allCategoriesSelected: Bool {
+        if let panel, panel.isDynamic {
+            return categories.allSatisfy { tag in
+                guard let control = panel.control(tagKey: tag.key) else { return true }
+                let value = filter.dynamic[control.id] ?? control.initial
+                return control.kind == "tristate" ? value.tri == 0 : !value.toggle
+            }
+        }
+        return filter.included.isEmpty && filter.excluded.isEmpty
+    }
 
     init(runtime: IosSources, source: IosSource, initialQuery: String? = nil) {
         self.runtime = runtime
@@ -45,40 +59,47 @@ final class SourceBrowseModel: ObservableObject {
     }
 
     func select(_ category: IosSourceTag?) async {
-        guard category?.key != selectedCategory?.key else { return }
+        var next = filter
         if let panel, panel.isDynamic {
             // Extension sources: the bar edits the same native checkbox/tri-state as the filter sheet.
-            if let previous = selectedCategory, let control = panel.control(tagKey: previous.key) {
-                filter.dynamic[control.id] = nil
+            for tag in categories {
+                guard let control = panel.control(tagKey: tag.key) else { continue }
+                let neutral = control.kind == "tristate" ? control.initial.with(tri: 0) : control.initial.with(toggle: false)
+                next.dynamic[control.id] = neutral == control.initial ? nil : neutral
             }
             if let category, let control = panel.control(tagKey: category.key) {
-                filter.dynamic[control.id] = control.kind == "tristate" ? .included : .checked
+                let selected = control.kind == "tristate" ? control.initial.with(tri: 1) : control.initial.with(toggle: true)
+                next.dynamic[control.id] = selected == control.initial ? nil : selected
             }
         } else {
-            filter.included = category.map { [$0.key] } ?? []
-            filter.excluded = []
+            next.included = category.map { [$0.key] } ?? []
+            next.excluded = []
         }
-        selectedCategory = category
-        await reload()
+        await apply(next)
     }
 
     /// Applies the filter panel; the quick category bar mirrors a single included tag.
     func apply(_ next: BrowseFilter) async {
         guard next != filter else { return }
         filter = next
-        if let panel, panel.isDynamic {
-            let included = next.dynamic.compactMap { id, value -> String? in
-                guard let tag = categories.first(where: { panel.control(tagKey: $0.key)?.id == id }),
-                      value == .included || value == .checked else { return nil }
-                return tag.key
-            }
-            selectedCategory = next.dynamic.count == 1 && included.count == 1
-                ? categories.first { $0.key == included[0] } : nil
-        } else {
-            selectedCategory = next.included.count == 1 && next.excluded.isEmpty
-                ? categories.first { next.included.contains($0.key) } : nil
-        }
+        synchronizeCategory()
         await reload()
+    }
+
+    private func synchronizeCategory() {
+        if let panel, panel.isDynamic {
+            var excluded = false
+            let included = categories.filter { tag in
+                guard let control = panel.control(tagKey: tag.key) else { return false }
+                let value = filter.dynamic[control.id] ?? control.initial
+                if control.kind == "tristate" && value.tri == 2 { excluded = true }
+                return control.kind == "tristate" ? value.tri == 1 : value.toggle
+            }
+            selectedCategory = included.count == 1 && !excluded ? included[0] : nil
+        } else {
+            selectedCategory = filter.included.count == 1 && filter.excluded.isEmpty
+                ? categories.first { filter.included.contains($0.key) } : nil
+        }
     }
 
     func submitSearch() async {
@@ -93,13 +114,21 @@ final class SourceBrowseModel: ObservableObject {
         await reload()
     }
 
-    func reload() async {
+    func reload(refreshPanel: Bool = false) async {
         generation = UUID()
+        let request = generation
         items = []
         page = 0
+        loadedCount = 0
         hasMore = true
         error = nil; challenge = nil
-        isLoading = false
+        isLoading = refreshPanel
+        if refreshPanel {
+            await loadCategories()
+            guard generation == request else { return }
+            isLoading = false
+        }
+        guard !Task.isCancelled else { return }
         await loadMore()
     }
 
@@ -120,12 +149,13 @@ final class SourceBrowseModel: ObservableObject {
         error = nil; challenge = nil
         defer { if generation == request { isLoading = false } }
         do {
-            let result = try await runtime.filteredPage(sourceName: source.name, page: page, loadedCount: Int32(items.count),
+            let result = try await runtime.filteredPage(sourceName: source.name, page: page, loadedCount: loadedCount,
                                                         query: activeQuery, selection: filter.selection)
-            guard generation == request else { return }
-            let known = Set(items.map(\.id))
-            let fresh = result.filter { !known.contains($0.id) }
+            guard !Task.isCancelled, generation == request else { return }
+            var known = Set(items.map(ContentMarks.key))
+            let fresh = result.filter { known.insert(ContentMarks.key($0)).inserted }
             items.append(contentsOf: fresh)
+            loadedCount += Int32(result.count)
             page += 1
             hasMore = !fresh.isEmpty
         } catch {
@@ -137,13 +167,22 @@ final class SourceBrowseModel: ObservableObject {
     }
 
     func loadCategories() async {
+        let request = UUID()
+        panelRequest = request
         panelError = nil
         do {
             let loaded = try await runtime.filterPanel(sourceName: source.name)
+            guard !Task.isCancelled, panelRequest == request else { return }
             panel = loaded
             categories = loaded.quickTags
+            filter = filter.reconciled(with: loaded)
+            synchronizeCategory()
         } catch {
-            if !Task.isCancelled { panelError = SourceErrorText.describe(error) }
+            if !Task.isCancelled, panelRequest == request {
+                panel = nil
+                categories = []
+                panelError = SourceErrorText.describe(error)
+            }
         }
     }
 }
@@ -155,13 +194,14 @@ struct SourceBrowseView: View {
     @Environment(\.isSearching) private var isSearching
     @State private var editingFilter = false
     @State private var settingsOpen = false
+    @State private var settingsNeedReload = false
     @State private var importingFiles = false
-    @State private var importMessage: String?
+    @State private var messageTitle = ""
+    @State private var message: String?
     @State private var searchPresented = false
     @State private var selecting = false
     @State private var selectedKeys: Set<String> = []
     @State private var favouriteRequest: FavouriteCategoryRequest?
-    @State private var favouriteError: String?
 
     /// Imported files (本地漫画 / 本地小说): an import button instead of source settings.
     private var isLocal: Bool { model.source.ecosystem == "LOCAL" }
@@ -202,7 +242,7 @@ struct SourceBrowseView: View {
                     Button("取消收藏", systemImage: "heart.slash", role: .destructive) {
                         Task {
                             do { try await library.setFavourite(item.content, favourite: false) }
-                            catch { favouriteError = error.localizedDescription }
+                            catch { showMessage("收藏失败", SourceErrorText.describe(error)) }
                         }
                     }
                 }
@@ -212,8 +252,12 @@ struct SourceBrowseView: View {
                 if isLocal {
                     Button("删除文件", systemImage: "trash", role: .destructive) {
                         Task {
-                            try? await model.runtime.removeLocal(content: item.content)
-                            await model.reload()
+                            do {
+                                try await model.runtime.removeLocal(content: item.content)
+                                await model.reload()
+                            } catch {
+                                if !Task.isCancelled { showMessage("删除本地文件失败", SourceErrorText.describe(error)) }
+                            }
                         }
                     }
                 }
@@ -275,24 +319,28 @@ struct SourceBrowseView: View {
         .sheet(item: $favouriteRequest) { request in
             FavouriteCategoriesView(contents: request.contents, onSaved: { clearSelection() })
         }
-        .alert("收藏失败", isPresented: Binding(get: { favouriteError != nil }, set: { if !$0 { favouriteError = nil } })) {
-            Button("好") { favouriteError = nil }
-        } message: { Text(favouriteError ?? "") }
         .fileImporter(isPresented: $importingFiles, allowedContentTypes: LocalImport.contentTypes,
                       allowsMultipleSelection: true) { result in
             guard case .success(let urls) = result else { return }
             Task {
-                importMessage = await LocalImport.run(urls, runtime: model.runtime)
+                if let result = await LocalImport.run(urls, runtime: model.runtime) {
+                    showMessage("导入本地文件", result)
+                }
                 await model.reload()
             }
         }
-        .alert("导入本地文件", isPresented: Binding(get: { importMessage != nil }, set: { if !$0 { importMessage = nil } })) {
-            Button("好") { importMessage = nil }
-        } message: {
-            Text(importMessage ?? "")
-        }
-        .sheet(isPresented: $settingsOpen) {
-            SourceSettingsView(runtime: model.runtime, source: model.source)
+        .alert(messageTitle, isPresented: Binding(get: { message != nil }, set: {
+            if !$0 { message = nil }
+        })) {
+            Button("好") { message = nil }
+        } message: { Text(message ?? "") }
+        .sheet(isPresented: $settingsOpen, onDismiss: {
+            if settingsNeedReload {
+                settingsNeedReload = false
+                Task { await model.reload(refreshPanel: true) }
+            }
+        }) {
+            SourceSettingsView(runtime: model.runtime, source: model.source) { settingsNeedReload = true }
         }
         .sheet(isPresented: $editingFilter) {
             if let panel = model.panel {
@@ -308,6 +356,11 @@ struct SourceBrowseView: View {
         selectedKeys.removeAll()
     }
 
+    private func showMessage(_ title: String, _ text: String) {
+        messageTitle = title
+        message = text
+    }
+
 
     private var categoryBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
@@ -316,7 +369,7 @@ struct SourceBrowseView: View {
                     // Every source has the entry: an empty panel explains itself, a failed one can be retried.
                     filterChip
                     if !model.categories.isEmpty {
-                    chip("全部", selected: model.selectedCategory == nil) { await model.select(nil) }
+                    chip("全部", selected: model.allCategoriesSelected) { await model.select(nil) }
                     ForEach(model.categories, id: \.key) { tag in
                         chip(tag.title, selected: model.selectedCategory?.key == tag.key) { await model.select(tag) }
                     }

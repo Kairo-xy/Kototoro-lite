@@ -14,6 +14,11 @@ internal class FixtureParser(context: MangaLoaderContext, source: MangaSource) :
     override val availableSortOrders: Set<SortOrder> = linkedSetOf(SortOrder.POPULARITY, SortOrder.UPDATED, SortOrder.RATING)
     override val filterCapabilities = MangaListFilterCapabilities(isMultipleTagsSupported = true, isSearchSupported = true)
     override val configKeyDomain = ConfigKey.Domain("fixture.example", "mirror.example")
+    override val authorizationProvider = object : tsuki.MangaParserAuthProvider {
+        override val authUrl: String get() = "https://$domain/account/login"
+        override suspend fun isAuthorized(): Boolean = false
+        override suspend fun getUsername(): String? = null
+    }
 
     override suspend fun getList(offset: Int, order: SortOrder, filter: MangaListFilter): List<Manga> =
         if (offset >= 4) emptyList() else (0 until 2).map { index ->

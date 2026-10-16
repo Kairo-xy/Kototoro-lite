@@ -1244,6 +1244,13 @@ class DesktopController(val session: DesktopSession) {
 
     fun updatePreference(node: SourcePreferenceNode, value: SourcePreferenceValue) = action {
         val screen = requireNotNull(state.value.preferences)
+        node.actionUrl?.let { url ->
+            val browser = requireNotNull(session.browser) { "请先配置 WebView2 浏览器" }
+            browser.openUrl(url)
+            browser.showWindow()
+            mutableState.update { it.copy(screen = DesktopScreen.BROWSER) }
+            return@action
+        }
         val result = session.sources.updatePreference(screen.source.name, screen.revision, node.id, value)
         val message = when (result.status) {
             SourcePreferenceUpdateStatus.ACCEPTED -> "设置已保存"

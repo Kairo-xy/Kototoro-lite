@@ -5,12 +5,32 @@ package org.skepsun.kototoro.parsers.site.fixture
 import okhttp3.Interceptor
 import okhttp3.Response
 import org.skepsun.kototoro.parsers.ContentLoaderContext
+import org.skepsun.kototoro.parsers.ContentParserAuthProvider
+import org.skepsun.kototoro.parsers.ContentParserCredentialsAuthProvider
 import org.skepsun.kototoro.parsers.InternalParsersApi
 import org.skepsun.kototoro.parsers.config.ConfigKey
 import org.skepsun.kototoro.parsers.core.AbstractContentParser
 import org.skepsun.kototoro.parsers.model.*
 
-internal class FixtureParser(context: ContentLoaderContext, source: ContentSource) : AbstractContentParser(context, source) {
+internal class FixtureParser(context: ContentLoaderContext, source: ContentSource) : AbstractContentParser(context, source),
+    ContentParserAuthProvider, ContentParserCredentialsAuthProvider {
+
+    private var username: String? = null
+    override val authUrl: String get() = "https://$domain/account/login"
+    override suspend fun isAuthorized(): Boolean = username != null
+    override suspend fun getUsername(): String = requireNotNull(username)
+    override suspend fun login(username: String, password: String): Boolean {
+        if (username == "cancel") throw java.util.concurrent.CancellationException("fixture cancellation")
+        if (username == "throw") error("fixture rejected password: $password")
+        return (password == " fixture password ").also { if (it) this.username = username }
+    }
+
+    override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
+        super.onCreateConfig(keys)
+        keys += ConfigKey.Text("epub_translations", "下载EPUB翻译来源顺序", "sakura>gpt")
+        keys += ConfigKey.Toggle("epub_parallel_translations", "下载EPUB并列翻译模式", false)
+        keys += ConfigKey.PreferredLanguage("下载EPUB语种", linkedMapOf("zh" to "中文", "zh_jp" to "中日"), "zh")
+    }
 
     override val availableSortOrders: Set<SortOrder> = linkedSetOf(SortOrder.POPULARITY, SortOrder.UPDATED, SortOrder.RATING)
     override val filterCapabilities = ContentListFilterCapabilities(isMultipleTagsSupported = true, isSearchSupported = true)

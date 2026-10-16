@@ -10,6 +10,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Response
 import org.koitharu.kotatsu.parsers.MangaLoaderContext as KTMangaLoaderContext
 import org.koitharu.kotatsu.parsers.MangaParser as KTMangaParser
+import org.koitharu.kotatsu.parsers.MangaParserAuthProvider as KTMangaParserAuthProvider
 import org.koitharu.kotatsu.parsers.bitmap.Bitmap as KTBitmap
 import org.koitharu.kotatsu.parsers.bitmap.Rect as KTRect
 import org.koitharu.kotatsu.parsers.config.ConfigKey as KTConfigKey
@@ -32,6 +33,7 @@ import org.koitharu.kotatsu.parsers.model.SortOrder as KTSortOrder
 import org.koitharu.kotatsu.parsers.util.LinkResolver as KTLinkResolver
 import org.skepsun.kototoro.parserhost.ParserLoaderContext
 import org.skepsun.kototoro.parsers.ContentLoaderContext
+import org.skepsun.kototoro.parsers.ContentParserAuthProvider
 import org.skepsun.kototoro.parsers.bitmap.Bitmap
 import org.skepsun.kototoro.parsers.bitmap.Rect
 import org.skepsun.kototoro.parsers.config.ConfigKey
@@ -76,6 +78,8 @@ internal class KotatsuContentParserAdapter(
     override val availableSortOrders: Set<SortOrder> = delegate.availableSortOrders.mapTo(linkedSetOf()) { it.toKototoro() }
     override val filterCapabilities: ContentListFilterCapabilities get() = delegate.filterCapabilities.toKototoro()
     override val configKeyDomain: ConfigKey.Domain get() = ConfigKey.Domain(*delegate.configKeyDomain.presetValues)
+    override val authorizationProvider: ContentParserAuthProvider?
+        get() = delegate.authorizationProvider?.let(::KotatsuAuthProviderAdapter)
 
     override suspend fun getList(offset: Int, order: SortOrder, filter: ContentListFilter): List<Content> =
         delegate.getList(offset, order.toKotatsu(), filter.toKotatsu(kotatsuSource)).map { it.toKototoro(source) }
@@ -104,6 +108,12 @@ internal class KotatsuContentParserAdapter(
     }
 
     override fun intercept(chain: Interceptor.Chain): Response = delegate.intercept(chain)
+}
+
+private class KotatsuAuthProviderAdapter(private val delegate: KTMangaParserAuthProvider) : ContentParserAuthProvider {
+    override val authUrl: String get() = delegate.authUrl
+    override suspend fun isAuthorized(): Boolean = delegate.isAuthorized()
+    override suspend fun getUsername(): String = delegate.getUsername()
 }
 
 /** Gives a Kotatsu plugin the host services; unlike the Android adapter it keeps image descrambling working. */
@@ -172,7 +182,7 @@ internal fun <T> KTConfigKey<T>.toKototoro(): ConfigKey<T>? = when (this) {
     is KTConfigKey.SplitByTranslations -> ConfigKey.SplitByTranslations(defaultValue) as ConfigKey<T>
     is KTConfigKey.PreferredImageServer -> ConfigKey.PreferredImageServer(presetValues, defaultValue) as ConfigKey<T>
     is KTConfigKey.InterceptCloudflare -> ConfigKey.InterceptCloudflare(defaultValue) as ConfigKey<T>
-    else -> null
+    is KTConfigKey.DisableUpdateChecking -> ConfigKey.Toggle(key, "禁用自动更新检查", defaultValue) as ConfigKey<T>
 }
 
 internal fun KTContentType.toKototoro(): ContentType = when (this) {

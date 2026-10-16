@@ -46,7 +46,7 @@ data class LocalChapter(
 
 /** Reads CBZ/ZIP, EPUB, TXT and video metadata; [decodeLegacyText] handles TXT files that are not UTF-8. */
 class LocalBookReader(
-    private val fileSystem: FileSystem = FileSystem.SYSTEM,
+    private val fileSystem: FileSystem = localFileSystem,
     private val decodeLegacyText: (ByteArray) -> String? = { null },
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
@@ -77,7 +77,7 @@ class LocalBookReader(
     fun chapterContent(file: Path, part: LocalChapter, publishImage: (String, ByteArray) -> String): SourceChapterContent {
         val document = part.document ?: throw IllegalArgumentException("章节不存在")
         val xhtml = entry(file, document).decodeToString()
-        val whole = Regex("<body[^>]*>(.*)</body>", setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL))
+        val whole = Regex("<body[^>]*>([\\s\\S]*)</body>", RegexOption.IGNORE_CASE)
             .find(xhtml)?.groupValues?.get(1) ?: xhtml
         // A section runs from its anchor element to the next section's; markup cut open there is tolerated by readers.
         val start = part.section?.let { LocalBookReader.anchorPosition(whole, it) } ?: 0
@@ -255,8 +255,8 @@ class LocalBookReader(
             // Only the table of contents: other navigation lists (landmarks, page lists) follow it.
             val toc = Regex("<nav\\b[^>]*toc[^>]*>([\\s\\S]*?)</nav>", RegexOption.IGNORE_CASE)
                 .find(xml)?.groupValues?.get(1) ?: xml
-            val entries = Regex("<a\\s[^>]*href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>(.*?)</a>",
-                setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).findAll(toc).mapNotNull { match ->
+            val entries = Regex("<a\\s[^>]*href\\s*=\\s*[\"']([^\"']+)[\"'][^>]*>([\\s\\S]*?)</a>",
+                RegexOption.IGNORE_CASE).findAll(toc).mapNotNull { match ->
                 LocalXml.text(match.groupValues[2]).takeIf(String::isNotEmpty)?.let { entry(nav.href, match.groupValues[1], it) }
             }.toList()
             if (entries.isNotEmpty()) return entries
@@ -264,8 +264,8 @@ class LocalBookReader(
         val ncx = items.firstOrNull { it.mediaType == "application/x-dtbncx+xml" || it.href.endsWith(".ncx", true) }
             ?: return emptyList()
         val xml = read(ncx.href) ?: return emptyList()
-        return Regex("<navLabel[^>]*>\\s*<text[^>]*>(.*?)</text>.*?<content\\s[^>]*src\\s*=\\s*[\"']([^\"']+)[\"']",
-            setOf(RegexOption.IGNORE_CASE, RegexOption.DOT_MATCHES_ALL)).findAll(xml).mapNotNull { match ->
+        return Regex("<navLabel[^>]*>\\s*<text[^>]*>([\\s\\S]*?)</text>[\\s\\S]*?<content\\s[^>]*src\\s*=\\s*[\"']([^\"']+)[\"']",
+            RegexOption.IGNORE_CASE).findAll(xml).mapNotNull { match ->
             LocalXml.text(match.groupValues[1]).takeIf(String::isNotEmpty)?.let { entry(ncx.href, match.groupValues[2], it) }
         }.toList()
     }

@@ -44,9 +44,12 @@ internal class ParserSourceConfig(private val preferences: SourcePreferences) : 
         preferences.edit(SourcePreferenceEdit(changes = mapOf(key to null)))
 
     companion object {
-        internal fun isValidDomain(value: String): Boolean =
-            value.isNotEmpty() && !value.contains('/') && !value.contains(' ') &&
-                "https://$value/".toHttpUrlOrNull() != null
+        internal fun isValidDomain(value: String): Boolean {
+            if (value.isEmpty() || value.any { it.isWhitespace() || it in "/\\?#@" }) return false
+            val url = "https://$value/".toHttpUrlOrNull() ?: return false
+            return url.username.isEmpty() && url.password.isEmpty() && url.encodedPath == "/" &&
+                url.query == null && url.fragment == null
+        }
 
         internal fun String.sanitizeHeaderValue(): String =
             filter { it == '\t' || it in ' '..'~' }.trim()

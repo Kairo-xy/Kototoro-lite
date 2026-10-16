@@ -57,6 +57,8 @@ struct ContentItem: Identifiable {
     /// Filled by [ContentCollection] from the library and downloads.
     var marks = ContentMarks()
     var id: String { content.id }
+    /// Rendering identity follows the same source/id pair as favourites and selection state.
+    var identity: String { ContentMarks.key(content) }
 }
 
 /// Android's card badges (`ContentCardRenderModel`), the ones that help when choosing what to read: new chapters,
@@ -188,7 +190,7 @@ struct ContentCollection<Destination: View, Actions: View>: View {
             LazyVGrid(columns: [GridItem(.adaptive(minimum: mode.targetWidth(scale: gridSize / 100)), spacing: spacing,
                                          alignment: .top)],
                       spacing: compact ? 8 : 16) {
-                ForEach(items) { item in
+                ForEach(items, id: \.identity) { item in
                     link(item) {
                         if compact { CompactCard(runtime: runtime, item: item, movie: mode.isMovie) }
                         else { GridCard(runtime: runtime, item: item, movie: mode.isMovie) }
@@ -198,7 +200,7 @@ struct ContentCollection<Destination: View, Actions: View>: View {
             .padding(.horizontal, compact ? 12 : 16)
         } else {
             LazyVStack(spacing: 0) {
-                ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
+                ForEach(Array(items.enumerated()), id: \.element.identity) { index, item in
                     link(item) {
                         ContentRow(runtime: runtime, item: item, detailed: mode == .detailed)
                             .padding(.horizontal, 16).padding(.vertical, mode == .detailed ? 12 : 9)
@@ -261,7 +263,7 @@ struct ContentCollection<Destination: View, Actions: View>: View {
             .accessibilityIdentifier("\(identifierPrefix)\(item.id)")
             .contextMenu { if selectedKeys == nil { actions(item) } }
             // A new layout needs a new menu interaction rather than the previous cell's UIKit registration.
-            .id("\(identifierPrefix)\(item.id).\(mode.rawValue)")
+            .id("\(identifierPrefix)\(item.identity).\(mode.rawValue)")
             .onAppear { onItemAppear?(item) }
     }
 }

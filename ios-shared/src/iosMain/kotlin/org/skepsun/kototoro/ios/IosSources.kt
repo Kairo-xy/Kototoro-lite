@@ -415,6 +415,7 @@ class IosSources(
     private val descriptors = HashMap<String, SourceDescriptor>()
     private val descriptorsMutex = Mutex()
     private val panels = mutableMapOf<String, IosFilterPanel>()
+    private var sourceCacheRevision = 0L
 
     val hasExtensionRuntime: Boolean get() = extensions != null
 
@@ -499,7 +500,11 @@ class IosSources(
     @Throws(Exception::class)
     suspend fun sourcesChanged() {
         cms?.invalidate()
-        descriptorsMutex.withLock { descriptors.clear(); panels.clear() }
+        descriptorsMutex.withLock {
+            sourceCacheRevision++
+            descriptors.clear()
+            panels.clear()
+        }
     }
 
     @Throws(Exception::class)
@@ -516,12 +521,15 @@ class IosSources(
 
     /** Cookies from the in-app browser (`Set-Cookie` lines) for the source's own requests; returns how many were kept. */
     @Throws(Exception::class)
-    suspend fun importCookies(sourceName: String, url: String, cookies: List<String>): Int =
-        runtime.importCookies(sourceName, url, cookies)
+    suspend fun importCookies(sourceName: String, url: String, cookies: List<String>): Int {
+        val imported = runtime.importCookies(sourceName, url, cookies)
+        if (imported > 0) invalidateSourceSettings(sourceName)
+        return imported
+    }
 
     /** Drops cached CMS site state after its settings change, so the next request uses the new address. */
     @Throws(Exception::class)
-    suspend fun reloadVideoSites() { cms?.invalidate() }
+    suspend fun reloadVideoSites() { sourcesChanged() }
 
     /** The source's settings; sources without any (or whose runtime has none) throw an unsupported error. */
     @Throws(Exception::class)
@@ -548,26 +556,44 @@ class IosSources(
         update(screen, node, SourcePreferenceValue.Action())
 
     private suspend fun update(screen: IosPreferenceScreen, node: IosPreferenceNode, value: SourcePreferenceValue): IosPreferenceResult {
-        val result = runtime.updatePreference(screen.sourceName, screen.revision, node.id, value)
+        val result = try {
+            runtime.updatePreference(screen.sourceName, screen.revision, node.id, value)
+        } finally {
+            // Native preference listeners may change derived settings even when they reject an edit or throw.
+            invalidateSourceSettings(screen.sourceName)
+        }
         return IosPreferenceResult(result.status.label(), IosPreferenceScreen(result.screen))
+    }
+
+    private suspend fun invalidateSourceSettings(sourceName: String) {
+        descriptorsMutex.withLock {
+            sourceCacheRevision++
+            descriptors.remove(sourceName)
+            panels.remove(sourceName)
+        }
     }
 
     @Throws(Exception::class)
     suspend fun filterPanel(sourceName: String): IosFilterPanel {
-        val descriptor = descriptor(sourceName)
-        val options = runtime.getFilterOptions(sourceName)
-        // Extensions with their own FilterList keep text/select/sort controls; the tag projection stays as fallback.
-        val dynamic = if (!descriptor.isDynamicFilteringSupported) null else try {
-            runtime.getDynamicFilters(sourceName).takeIf { it.source.name == sourceName }
-        } catch (error: kotlin.coroutines.cancellation.CancellationException) {
-            throw error
-        } catch (_: Exception) { null }
-        // Apple CMS listings keep the site's newest-first order; relevance only applies to search.
-        val panel = if (MacCmsSourceRuntime.owns(sourceName)) IosFilterPanel(descriptor, options,
-            MacCmsSourceRuntime.ORDER_NEWEST, setOf(MacCmsSourceRuntime.ORDER_RELEVANCE))
-            else IosFilterPanel(descriptor, options, dynamic = dynamic)
-        descriptorsMutex.withLock { panels[sourceName] = panel }
-        return panel
+        while (true) {
+            val revision = descriptorsMutex.withLock { sourceCacheRevision }
+            val descriptor = descriptor(sourceName)
+            val options = runtime.getFilterOptions(sourceName)
+            // An advertised native FilterList must load successfully; a failure is retryable, not an empty panel.
+            val dynamic = if (!descriptor.isDynamicFilteringSupported) null else
+                runtime.getDynamicFilters(sourceName).also { check(it.source.name == sourceName) { "Filter source mismatch" } }
+            // Apple CMS listings keep the site's newest-first order; relevance only applies to search.
+            val panel = if (MacCmsSourceRuntime.owns(sourceName)) IosFilterPanel(descriptor, options,
+                MacCmsSourceRuntime.ORDER_NEWEST, setOf(MacCmsSourceRuntime.ORDER_RELEVANCE))
+                else IosFilterPanel(descriptor, options, dynamic = dynamic)
+            val published = descriptorsMutex.withLock {
+                if (revision != sourceCacheRevision) false else {
+                    panels[sourceName] = panel
+                    true
+                }
+            }
+            if (published) return panel
+        }
     }
 
     /** Listing with the browse screen's filter panel selection; search text wins when the source cannot combine. */
@@ -582,8 +608,10 @@ class IosSources(
         val descriptor = descriptor(sourceName)
         val offset = if (descriptor.pagingMode == SourcePagingMode.PAGE_INDEX) page else loadedCount
         val search = query?.trim()?.takeIf(String::isNotEmpty)
-        val panel = descriptorsMutex.withLock { panels[sourceName] }
         val combined = search == null || descriptor.filterCapabilities.isSearchWithFiltersSupported
+        val panel = if (combined && selection?.needsPanel == true) {
+            descriptorsMutex.withLock { panels[sourceName] } ?: filterPanel(sourceName)
+        } else null
         val filter = if (combined) selection?.toFilter(panel, search) ?: search?.let { SourceFilter(query = it) }
             else SourceFilter(query = search)
         val order = when {
@@ -595,8 +623,8 @@ class IosSources(
     }
 
     /**
-     * One page of a listing or search. [loadedCount] is what the screen already shows; the source's paging mode
-     * decides whether the request offset is the page index or the item count.
+     * One page of a listing or search. [loadedCount] counts raw results from previous pages, before UI deduplication;
+     * the source's paging mode decides whether the request offset is the page index or that count.
      */
     @Throws(Exception::class)
     suspend fun page(
@@ -642,7 +670,9 @@ class IosSources(
     @Throws(Exception::class)
     suspend fun image(page: IosSourcePage): IosSourceImage {
         val artifact = runtime.fetchImage(page.value)
-        check(artifact.source == page.value.source && artifact.pageId == page.value.id) { "Image identity mismatch" }
+        check(artifact.source.name == page.value.source.name && artifact.pageId == page.value.id) {
+            "Image identity mismatch"
+        }
         return IosSourceImage(artifact.relativePath, artifact.sha256, artifact.byteSize)
     }
 
@@ -672,10 +702,21 @@ class IosSources(
         emptyList()
     }
 
-    private suspend fun descriptor(sourceName: String): SourceDescriptor =
-        descriptorsMutex.withLock { descriptors[sourceName] } ?: runtime.describe(sourceName).also { described ->
-            descriptorsMutex.withLock { descriptors[sourceName] = described }
+    private suspend fun descriptor(sourceName: String): SourceDescriptor {
+        while (true) {
+            val (cached, revision) = descriptorsMutex.withLock { descriptors[sourceName] to sourceCacheRevision }
+            if (cached != null) return cached
+            val described = runtime.describe(sourceName)
+            check(described.source.name == sourceName) { "Descriptor source mismatch" }
+            val published = descriptorsMutex.withLock {
+                if (revision != sourceCacheRevision) false else {
+                    descriptors[sourceName] = described
+                    true
+                }
+            }
+            if (published) return described
         }
+    }
 
     fun close() {
         transport?.close()

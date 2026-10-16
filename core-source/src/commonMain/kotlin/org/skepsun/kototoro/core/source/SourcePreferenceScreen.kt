@@ -22,6 +22,10 @@ data class SourcePreferenceNode(
     val choices: List<SourcePreferenceChoice> = emptyList(),
     val children: List<SourcePreferenceNode> = emptyList(),
     val isSecret: Boolean = false,
+    /** ACTION nodes may open the source's login page without executing an update. */
+    val actionUrl: String? = null,
+    /** Domain choices are suggestions; the source also accepts a custom mirror. */
+    val allowsCustomValue: Boolean = false,
 )
 
 /** Revision identifies live native control objects, not merely a hash of their displayed labels. */

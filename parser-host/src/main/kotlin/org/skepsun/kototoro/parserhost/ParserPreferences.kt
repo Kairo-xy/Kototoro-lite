@@ -1,5 +1,7 @@
 package org.skepsun.kototoro.parserhost
 
+import kotlinx.coroutines.CancellationException
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import org.skepsun.kototoro.core.source.SourceInvalidArgumentException
 import org.skepsun.kototoro.core.source.SourcePreferenceChoice
 import org.skepsun.kototoro.core.source.SourcePreferenceKind
@@ -17,7 +19,7 @@ import java.util.UUID
 
 /**
  * Settings screen of one parser source, derived from the keys it declares in `onCreateConfig`,
- * plus authentication options if the parser implements [ContentParserAuthProvider].
+ * plus authentication options exposed by [ContentParser.authorizationProvider], including wrapped parsers.
  * A revision guards against a stale screen writing over a newer one.
  */
 internal class ParserPreferences(
@@ -29,6 +31,11 @@ internal class ParserPreferences(
     private val keys = keys.distinctBy { it.key }.associateBy { nodeId(it) }
     private var revision = UUID.randomUUID().toString()
     private var lastErrorMessage: String? = null
+    private val authProvider: ContentParserAuthProvider? get() = parser?.authorizationProvider
+    private val credentialsProvider: ContentParserCredentialsAuthProvider?
+        get() = authProvider as? ContentParserCredentialsAuthProvider
+
+    fun owns(parser: ContentParser): Boolean = this.parser === parser
 
     suspend fun screen(): SourcePreferenceScreen {
         val configNodes = keys.map { (id, key) -> node(id, key) }
@@ -42,36 +49,36 @@ internal class ParserPreferences(
 
         when (nodeId) {
             KEY_AUTH_USERNAME -> {
-                val text = (value as? SourcePreferenceValue.Text)?.value.orEmpty().trim()
-                config.putString(STORE_USERNAME, text)
-                lastErrorMessage = null
-                revision = UUID.randomUUID().toString()
-                return SourcePreferenceUpdate(SourcePreferenceUpdateStatus.ACCEPTED, screen())
+                if (credentialsProvider == null) throw SourceInvalidArgumentException()
+                val text = (value as? SourcePreferenceValue.Text)?.value ?: throw SourceInvalidArgumentException()
+                return saveCredential(STORE_USERNAME, text.trim())
             }
             KEY_AUTH_PASSWORD -> {
-                val text = (value as? SourcePreferenceValue.Text)?.value.orEmpty()
-                config.putString(STORE_PASSWORD, text)
-                lastErrorMessage = null
-                revision = UUID.randomUUID().toString()
-                return SourcePreferenceUpdate(SourcePreferenceUpdateStatus.ACCEPTED, screen())
+                if (credentialsProvider == null) throw SourceInvalidArgumentException()
+                val text = (value as? SourcePreferenceValue.Text)?.value ?: throw SourceInvalidArgumentException()
+                return saveCredential(STORE_PASSWORD, text)
             }
             KEY_AUTH_LOGIN -> {
-                val credentialsProvider = parser as? ContentParserCredentialsAuthProvider
-                    ?: throw SourceInvalidArgumentException()
+                val credentialsProvider = credentialsProvider ?: throw SourceInvalidArgumentException()
+                if (value !is SourcePreferenceValue.Action) throw SourceInvalidArgumentException()
                 val user = config.getString(STORE_USERNAME, "").trim()
-                val pass = config.getString(STORE_PASSWORD, "").trim()
+                val pass = config.getString(STORE_PASSWORD, "")
                 if (user.isEmpty() || pass.isEmpty()) {
                     lastErrorMessage = "用户名或密码不能为空"
                     revision = UUID.randomUUID().toString()
                     return SourcePreferenceUpdate(SourcePreferenceUpdateStatus.REJECTED, screen())
                 }
+                lastErrorMessage = null
+                revision = UUID.randomUUID().toString()
                 val loginSuccess = try {
                     credentialsProvider.login(user, pass)
+                } catch (e: CancellationException) {
+                    throw e
                 } catch (e: Exception) {
-                    lastErrorMessage = e.message ?: "登录异常"
+                    // Extension exceptions can contain submitted credentials or response tokens.
+                    lastErrorMessage = "登录异常，请检查网络或使用网页登录"
                     false
                 }
-                revision = UUID.randomUUID().toString()
                 return if (loginSuccess) {
                     lastErrorMessage = null
                     SourcePreferenceUpdate(SourcePreferenceUpdateStatus.ACCEPTED, screen())
@@ -80,11 +87,11 @@ internal class ParserPreferences(
                     SourcePreferenceUpdate(SourcePreferenceUpdateStatus.REJECTED, screen())
                 }
             }
-            KEY_AUTH_LOGOUT -> {
-                config.remove(STORE_PASSWORD)
-                lastErrorMessage = null
-                revision = UUID.randomUUID().toString()
-                return SourcePreferenceUpdate(SourcePreferenceUpdateStatus.ACCEPTED, screen())
+            KEY_AUTH_CLEAR_PASSWORD -> {
+                if (credentialsProvider == null || value !is SourcePreferenceValue.Action) {
+                    throw SourceInvalidArgumentException()
+                }
+                return saveCredential(STORE_PASSWORD, null)
             }
         }
 
@@ -112,16 +119,33 @@ internal class ParserPreferences(
         return SourcePreferenceUpdate(status, screen())
     }
 
-    private suspend fun buildAuthGroup(): SourcePreferenceNode? {
-        val authProvider = parser as? ContentParserAuthProvider ?: return null
-        val credentialsProvider = authProvider as? ContentParserCredentialsAuthProvider
+    private suspend fun saveCredential(key: String, value: String?): SourcePreferenceUpdate {
+        lastErrorMessage = null
+        revision = UUID.randomUUID().toString()
+        val saved = if (value == null) config.remove(key) else config.putString(key, value)
+        val status = if (saved) SourcePreferenceUpdateStatus.ACCEPTED else SourcePreferenceUpdateStatus.PERSISTENCE_FAILED
+        return SourcePreferenceUpdate(status, screen())
+    }
 
-        val isAuth = runCatching { authProvider.isAuthorized() }.getOrDefault(false)
-        val username = if (isAuth) runCatching { authProvider.getUsername() }.getOrNull() else null
+    private suspend fun <T> authResult(block: suspend () -> T): Result<T> = try {
+        Result.success(block())
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
+    }
+
+    private suspend fun buildAuthGroup(): SourcePreferenceNode? {
+        val authProvider = authProvider ?: return null
+        val credentialsProvider = credentialsProvider
+
+        val authorized = authResult { authProvider.isAuthorized() }
+        val isAuth = authorized.getOrDefault(false)
+        val username = if (isAuth) authResult { authProvider.getUsername() }.getOrNull() else null
         val statusSummary = when {
-            lastErrorMessage != null -> "错误: $lastErrorMessage"
             isAuth && !username.isNullOrBlank() -> "已登录为: $username"
             isAuth -> "已登录"
+            authorized.isFailure -> "暂时无法确认登录状态，请重试"
             else -> "未登录"
         }
 
@@ -135,6 +159,17 @@ internal class ParserPreferences(
             enabled = true,
             visible = true,
         )
+        lastErrorMessage?.let { message ->
+            children += SourcePreferenceNode(
+                id = KEY_AUTH_ERROR,
+                key = null,
+                title = "登录结果",
+                summary = message,
+                kind = SourcePreferenceKind.INFO,
+                enabled = true,
+                visible = true,
+            )
+        }
 
         if (credentialsProvider != null) {
             val savedUser = config.getString(STORE_USERNAME, "")
@@ -168,20 +203,34 @@ internal class ParserPreferences(
                 title = if (isAuth) "重新登录" else "登录",
                 summary = if (isAuth) "点击使用当前保存的账号密码重新验证" else "点击使用上方账号密码登录",
                 kind = SourcePreferenceKind.ACTION,
-                enabled = savedUser.isNotBlank() && savedPass.isNotBlank(),
+                enabled = savedUser.isNotBlank() && savedPass.isNotEmpty(),
                 visible = true,
             )
-            if (isAuth) {
+            if (savedPass.isNotEmpty()) {
                 children += SourcePreferenceNode(
-                    id = KEY_AUTH_LOGOUT,
+                    id = KEY_AUTH_CLEAR_PASSWORD,
                     key = null,
-                    title = "退出登录",
-                    summary = "清除登录状态与保存的密码",
+                    title = "清除已保存的密码",
+                    summary = "站点登录会话仍然保留",
                     kind = SourcePreferenceKind.ACTION,
                     enabled = true,
                     visible = true,
                 )
             }
+        }
+
+        val authUrl = authResult { authProvider.authUrl }.getOrNull()?.toHttpUrlOrNull()
+        if (authUrl != null && authUrl.username.isEmpty() && authUrl.password.isEmpty()) {
+            children += SourcePreferenceNode(
+                id = KEY_AUTH_BROWSER,
+                key = null,
+                title = "网页登录",
+                summary = "在内置浏览器完成登录后，点完成以更新登录状态",
+                kind = SourcePreferenceKind.ACTION,
+                enabled = true,
+                visible = true,
+                actionUrl = authUrl.toString(),
+            )
         }
 
         return SourcePreferenceNode(
@@ -202,7 +251,7 @@ internal class ParserPreferences(
         fun node(title: String, kind: SourcePreferenceKind, value: SourcePreferenceValue?, default: SourcePreferenceValue?,
             choices: List<SourcePreferenceChoice> = emptyList(), summary: String = "") =
             SourcePreferenceNode(id, key.key, title, summary, kind, enabled = true, visible = true, value = value,
-                defaultValue = default, choices = choices)
+                defaultValue = default, choices = choices, allowsCustomValue = key is ConfigKey.Domain)
         fun toggle(title: String, default: Boolean) = node(title, SourcePreferenceKind.TOGGLE,
             SourcePreferenceValue.Toggle(current as Boolean), SourcePreferenceValue.Toggle(default))
         return when (key) {
@@ -226,10 +275,12 @@ internal class ParserPreferences(
 
     companion object {
         const val KEY_AUTH_STATUS = "auth:status"
+        const val KEY_AUTH_ERROR = "auth:error"
         const val KEY_AUTH_USERNAME = "auth:username"
         const val KEY_AUTH_PASSWORD = "auth:password"
         const val KEY_AUTH_LOGIN = "auth:login"
-        const val KEY_AUTH_LOGOUT = "auth:logout"
+        const val KEY_AUTH_CLEAR_PASSWORD = "auth:clear_password"
+        const val KEY_AUTH_BROWSER = "auth:browser"
         const val KEY_AUTH_GROUP = "auth:group"
         const val STORE_USERNAME = "auth_username"
         const val STORE_PASSWORD = "auth_password"

@@ -41,39 +41,60 @@ final class SourceDetailsModel: ObservableObject {
     let runtime: IosSources
     @Published private(set) var content: IosSourceContent
     private var detailsRequest: UUID?
+    private var relatedRequest: UUID?
     /// The shown details came from the source in this screen, not from the cache or the saved record.
     private var fetched = false
 
     func loadRelated() async {
-        guard related.isEmpty else { return }
+        guard related.isEmpty, relatedRequest == nil else { return }
+        let request = UUID()
+        relatedRequest = request
+        defer { if relatedRequest == request { relatedRequest = nil } }
         let current = details ?? content
+        let identity = ContentMarks.key(current)
+        func suggestions(_ list: [IosSourceContent]) -> [IosSourceContent] {
+            var seen: Set<String> = [identity]
+            return list.filter { candidate in
+                !(candidate.sourceName == current.sourceName && candidate.url == current.url) &&
+                    seen.insert(ContentMarks.key(candidate)).inserted
+            }
+        }
         if let list = try? await runtime.related(content: current), !list.isEmpty {
-            let filtered = list.filter { $0.id != current.id && $0.url != current.url }
+            guard relatedIsCurrent(request, identity: identity) else { return }
+            let filtered = suggestions(list)
             if !filtered.isEmpty {
                 related = filtered
                 return
             }
         }
+        guard relatedIsCurrent(request, identity: identity) else { return }
         // Fallback: search works by the same author in the same source
         if let author = current.authors.first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
-            if let list = try? await runtime.page(sourceName: current.sourceName, page: 1, loadedCount: 0, query: author, tag: nil) {
-                let filtered = list.filter { $0.id != current.id && $0.url != current.url }
+            if let list = try? await runtime.page(sourceName: current.sourceName, page: 0, loadedCount: 0, query: author, tag: nil) {
+                guard relatedIsCurrent(request, identity: identity) else { return }
+                let filtered = suggestions(list)
                 if !filtered.isEmpty {
                     related = filtered
                     return
                 }
             }
         }
+        guard relatedIsCurrent(request, identity: identity) else { return }
         // Fallback: search works with the primary tag in the same source
         if let tag = current.tags.first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) {
-            if let list = try? await runtime.page(sourceName: current.sourceName, page: 1, loadedCount: 0, query: tag, tag: nil) {
-                let filtered = list.filter { $0.id != current.id && $0.url != current.url }
+            if let list = try? await runtime.page(sourceName: current.sourceName, page: 0, loadedCount: 0, query: tag, tag: nil) {
+                guard relatedIsCurrent(request, identity: identity) else { return }
+                let filtered = suggestions(list)
                 if !filtered.isEmpty {
                     related = filtered
                     return
                 }
             }
         }
+    }
+
+    private func relatedIsCurrent(_ request: UUID, identity: String) -> Bool {
+        !Task.isCancelled && relatedRequest == request && ContentMarks.key(content) == identity
     }
 
     init(runtime: IosSources, content: IosSourceContent) {
@@ -110,24 +131,34 @@ final class SourceDetailsModel: ObservableObject {
     }
 
     func refresh() async {
+        let request = UUID()
+        detailsRequest = request
+        isLoading = true
+        defer { if detailsRequest == request { isLoading = false } }
         let identity = ContentMarks.key(content)
         do {
             let result = try await runtime.refreshDetails(content: details ?? content)
-            guard identity == ContentMarks.key(content) else { return }
+            guard !Task.isCancelled, detailsRequest == request, identity == ContentMarks.key(content) else { return }
             apply(result); fetched = true; error = nil; challenge = nil
             DetailsCache.put(result)
-        } catch { if !Task.isCancelled, identity == ContentMarks.key(content) { fail(error) } }
+            await loadRelated()
+        } catch {
+            if !Task.isCancelled, detailsRequest == request, identity == ContentMarks.key(content) { fail(error) }
+        }
     }
 
     /// Invalidate the previous source's in-flight result before replacing the displayed work.
     func changeContent(_ target: IosSourceContent) {
         detailsRequest = nil
+        relatedRequest = nil
+        related = []
         isLoading = false
         content = target
         apply(target)
         fetched = true
         error = nil; challenge = nil
         DetailsCache.put(target)
+        Task { await loadRelated() }
     }
 
     /// Readable text, and whether the site asked for browser verification.

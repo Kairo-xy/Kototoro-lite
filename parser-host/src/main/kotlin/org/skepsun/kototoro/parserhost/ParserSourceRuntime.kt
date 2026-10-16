@@ -9,6 +9,8 @@ import okhttp3.Cookie
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.skepsun.kototoro.core.source.SourceChapter
 import org.skepsun.kototoro.core.source.SourceChapterContent
@@ -52,6 +54,7 @@ class ParserSourceRuntime(
 ) : SourceRuntime {
     private val requests = ParserImageRequests(platform)
     private val settings = ConcurrentHashMap<String, ParserPreferences>()
+    private val settingsLocks = ConcurrentHashMap<String, Mutex>()
 
     override suspend fun getSources(): List<SourceRef> = registry.sources().map { it.source }
 
@@ -164,7 +167,7 @@ class ParserSourceRuntime(
             parsed.size
         }
 
-    override suspend fun getPreferences(sourceName: String): SourcePreferenceScreen = execute(sourceName) { handle ->
+    override suspend fun getPreferences(sourceName: String): SourcePreferenceScreen = preferenceOperation(sourceName) { handle ->
         val keys = ArrayList<ConfigKey<*>>().also { handle.parser.onCreateConfig(it) }
         val config = ParserSourceConfig(platform.preferences.open(ParserLoaderContext.namespace(sourceName)))
         ParserPreferences(handle.info.source, keys, config, handle.parser).also { settings[sourceName] = it }.screen()
@@ -172,9 +175,15 @@ class ParserSourceRuntime(
 
     override suspend fun updatePreference(
         sourceName: String, revision: String, nodeId: String, value: SourcePreferenceValue,
-    ): SourcePreferenceUpdate = execute(sourceName) {
-        (settings[sourceName] ?: throw SourceInvalidArgumentException()).update(revision, nodeId, value)
+    ): SourcePreferenceUpdate = preferenceOperation(sourceName) { handle ->
+        val preferences = settings[sourceName]?.takeIf { it.owns(handle.parser) } ?: throw SourceInvalidArgumentException()
+        preferences.update(revision, nodeId, value)
     }
+
+    private suspend fun <T> preferenceOperation(sourceName: String, block: suspend (ParserHandle) -> T): T =
+        execute(sourceName) { handle ->
+            settingsLocks.computeIfAbsent(sourceName) { Mutex() }.withLock { block(handle) }
+        }
 
     private suspend fun <T> execute(sourceName: String, block: suspend (ParserHandle) -> T): T {
         if (sourceName.isEmpty()) throw SourceInvalidArgumentException()

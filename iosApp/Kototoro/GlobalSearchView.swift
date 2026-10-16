@@ -62,9 +62,10 @@ final class GlobalSearchModel: ObservableObject {
                     do {
                         let found = try await runtime.filteredPage(sourceName: source.name, page: 0, loadedCount: 0,
                                                                    query: query, selection: nil)
-                        return (source.name, .done(found))
+                        var seen = Set<String>()
+                        return (source.name, .done(found.filter { seen.insert(ContentMarks.key($0)).inserted }))
                     } catch {
-                        return (source.name, .failed(error.localizedDescription))
+                        return (source.name, .failed(SourceErrorText.describe(error)))
                     }
                 }
             }
@@ -252,7 +253,8 @@ struct GlobalSearchView: View {
     private func carousel(_ items: [IosSourceContent], runtime: IosSources) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             LazyHStack(alignment: .top, spacing: 12) {
-                ForEach(items, id: \.id) { item in
+                ForEach(items.map { ContentItem(content: $0) }, id: \.identity) { entry in
+                    let item = entry.content
                     NavigationLink {
                         SourceDetailsView(runtime: runtime, content: item)
                     } label: {

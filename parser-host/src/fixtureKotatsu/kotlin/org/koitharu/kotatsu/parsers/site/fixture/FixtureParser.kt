@@ -6,6 +6,7 @@ import okhttp3.Interceptor
 import okhttp3.Response
 import org.koitharu.kotatsu.parsers.InternalParsersApi
 import org.koitharu.kotatsu.parsers.MangaLoaderContext
+import org.koitharu.kotatsu.parsers.MangaParserAuthProvider
 import org.koitharu.kotatsu.parsers.config.ConfigKey
 import org.koitharu.kotatsu.parsers.core.AbstractMangaParser
 import org.koitharu.kotatsu.parsers.model.*
@@ -15,6 +16,16 @@ internal class FixtureParser(context: MangaLoaderContext, source: MangaSource) :
     override val availableSortOrders: Set<SortOrder> = linkedSetOf(SortOrder.POPULARITY, SortOrder.UPDATED, SortOrder.RATING)
     override val filterCapabilities = MangaListFilterCapabilities(isMultipleTagsSupported = true, isSearchSupported = true)
     override val configKeyDomain = ConfigKey.Domain("fixture.example", "mirror.example")
+    override val authorizationProvider = object : MangaParserAuthProvider {
+        override val authUrl: String get() = "https://$domain/account/login"
+        override suspend fun isAuthorized(): Boolean = false
+        override suspend fun getUsername(): String = error("Not authorized")
+    }
+
+    override fun onCreateConfig(keys: MutableCollection<ConfigKey<*>>) {
+        super.onCreateConfig(keys)
+        keys += ConfigKey.DisableUpdateChecking()
+    }
 
     override suspend fun getList(offset: Int, order: SortOrder, filter: MangaListFilter): List<Manga> =
         if (offset >= 4) emptyList() else (0 until 2).map { index ->

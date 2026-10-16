@@ -53,6 +53,9 @@ class IosFilterControl internal constructor(node: SourceFilterNode, parent: Stri
 
     internal fun flatten(): List<IosFilterControl> = listOf(this) + children.flatMap { it.flatten() }
 
+    /** A saved draft can outlive source settings that change the control's available choices. */
+    fun accepts(value: IosFilterValue): Boolean = change(value) != null
+
     internal fun change(value: IosFilterValue): SourceFilterChange? = SourceFilterChange(id, when (nodeKind) {
         SourceFilterKind.CHECKBOX -> SourceFilterValue.Toggle(value.toggle)
         SourceFilterKind.TRISTATE -> SourceFilterValue.TriState(SourceTriState.entries.getOrNull(value.tri) ?: return null)
@@ -105,7 +108,7 @@ class IosFilterPanel internal constructor(
     /** The control a quick-bar tag stands for, so the bar and the sheet edit the same native state. */
     fun control(tagKey: String): IosFilterControl? = controlsById.values.firstOrNull { it.tagKey == tagKey }
 
-    internal fun controlById(id: String): IosFilterControl? = controlsById[id]
+    fun controlById(id: String): IosFilterControl? = controlsById[id]
 
     internal fun tag(key: String): SourceTag? = options.effectiveTagGroups.firstNotNullOfOrNull { group ->
         group.tags.firstOrNull { it.key == key }
@@ -132,6 +135,9 @@ class IosFilterSelection(
     /** Only controls the user moved away from the extension's defaults. */
     val dynamic: List<IosFilterChange>,
 ) {
+    internal val needsPanel: Boolean
+        get() = tagKeys.isNotEmpty() || excludedTagKeys.isNotEmpty() || dynamic.isNotEmpty()
+
     internal fun toFilter(panel: IosFilterPanel?, query: String?): SourceFilter? {
         val tags = tagKeys.mapNotNull { panel?.tag(it) }.toSet()
         val excluded = excludedTagKeys.mapNotNull { panel?.tag(it) }.toSet()

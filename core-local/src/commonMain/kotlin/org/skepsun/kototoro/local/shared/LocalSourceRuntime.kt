@@ -59,7 +59,7 @@ data class LocalItem(
 class LocalSourceRuntime(
     private val root: Path,
     private val imageDirectory: Path,
-    private val fileSystem: FileSystem = FileSystem.SYSTEM,
+    private val fileSystem: FileSystem = localFileSystem,
     decodeLegacyText: (ByteArray) -> String? = { null },
     private val now: () -> Long = { Clock.System.now().toEpochMilliseconds() },
 ) : SourceRuntime {

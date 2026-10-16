@@ -28,6 +28,35 @@ struct BrowseFilter: Equatable {
 
     func isActive(_ panel: IosFilterPanel) -> Bool { count > 0 || (order != nil && order != panel.defaultSortOrder) }
 
+    /// Source settings may change the available tags and choices while the browse screen remains open.
+    func reconciled(with panel: IosFilterPanel) -> BrowseFilter {
+        var next = self
+        let tags = Set(panel.groups.flatMap { $0.tags.map(\.key) })
+        next.included.formIntersection(tags)
+        next.excluded = panel.excludeTags ? excluded.intersection(tags) : []
+        if !panel.multipleTags { next.included = Set(next.included.sorted().prefix(1)) }
+        for group in panel.groups where group.isExclusive {
+            let chosen = next.included.intersection(group.tags.map(\.key)).sorted()
+            if chosen.count > 1 { next.included.subtract(chosen.dropFirst()) }
+        }
+        next.states.formIntersection(panel.states)
+        next.ratings.formIntersection(panel.contentRatings)
+        next.types.formIntersection(panel.types)
+        next.demographics.formIntersection(panel.demographics)
+        if let order, !panel.sortOrders.contains(order) { next.order = nil }
+        if let locale, !panel.locales.contains(locale) { next.locale = nil }
+        if !panel.originalLocale { next.originalLocale = nil }
+        else if let originalLocale, !panel.locales.contains(originalLocale) { next.originalLocale = nil }
+        if !panel.year { next.year = 0 }
+        if !panel.yearRange { next.yearFrom = 0; next.yearTo = 0 }
+        if !panel.author { next.author = "" }
+        next.dynamic = dynamic.filter { id, value in
+            guard let control = panel.controlById(id: id) else { return false }
+            return control.accepts(value: value) && value != control.initial
+        }
+        return next
+    }
+
     var selection: IosFilterSelection? {
         guard count > 0 || order != nil else { return nil }
         let author = author.trimmingCharacters(in: .whitespaces)

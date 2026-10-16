@@ -314,6 +314,10 @@ class IosProductTest {
         assertEquals(chapter, restored.chapter.value)
         assertEquals(Long.MIN_VALUE.toString(), restored.content.id)
         assertEquals(Long.MAX_VALUE.toString(), restored.chapter.id)
+        val storedContent = content.copy(source = source.copy(locale = ""))
+        val mixed = codec.decode(codec.encode(IosSourceContent(storedContent), IosSourceChapter(chapter)))
+        assertEquals(storedContent.copy(chapters = null), mixed.content.value)
+        assertEquals(chapter, mixed.chapter.value)
         assertFailsWith<IllegalArgumentException> {
             codec.encode(IosSourceContent(content), IosSourceChapter(chapter.copy(source = source.copy(name = "OTHER"))))
         }

@@ -10,7 +10,7 @@ import org.skepsun.kototoro.core.source.SourceContent
 class IosDownloadArchive {
     @Throws(Exception::class)
     fun encode(content: IosSourceContent, chapter: IosSourceChapter): String {
-        require(content.value.source == chapter.value.source) { "下载章节与作品来源不一致" }
+        require(content.value.source.name == chapter.value.source.name) { "下载章节与作品来源不一致" }
         require(content.mediaKind in DOWNLOADABLE) { "当前仅支持漫画与小说章节下载" }
         // A thousand-chapter catalog must not be duplicated once per queued chapter.
         return Json.encodeToString(Request(content.value.copy(chapters = null), chapter.value))
@@ -22,7 +22,7 @@ class IosDownloadArchive {
         require(request.version == 1) { "下载任务版本尚不支持" }
         val content = IosSourceContent(request.content)
         val chapter = IosSourceChapter(request.chapter)
-        require(request.content.source == request.chapter.source) { "下载章节与作品来源不一致" }
+        require(request.content.source.name == request.chapter.source.name) { "下载章节与作品来源不一致" }
         require(content.mediaKind in DOWNLOADABLE) { "当前仅支持漫画与小说章节下载" }
         return IosDownloadRequest(content, chapter)
     }
