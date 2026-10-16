@@ -83,7 +83,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          apks=(app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk)
+          apks=(app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*arm64-v8a*.apk)
           if (( ${#apks[@]} == 0 )); then
             echo 'No debug or release APK was produced.' >&2
             exit 1
@@ -109,7 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          apks=(app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk)
+          apks=(app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*arm64-v8a*.apk)
           for apk in "${apks[@]}"; do
             echo "Largest entries in $apk (uncompressed sizes):"
             unzip -l "$apk" | awk 'NF >= 4 && $1 ~ /^[0-9]+$/ { print $1 "\t" $4 }' | sort -nr | sed -n '1,30p'
@@ -122,7 +122,7 @@ jobs:
         run: |
           set -euo pipefail
           shopt -s nullglob
-          apks=(app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*.apk)
+          apks=(app/build/outputs/apk/debug/*.apk app/build/outputs/apk/release/*arm64-v8a*.apk)
           if (( ${#apks[@]} == 0 )); then
             echo 'No debug APK was produced.' >&2
             exit 1
@@ -137,6 +137,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: kototoro-lite-arm64-release
-          path: app/build/outputs/apk/release/*.apk
+          path: app/build/outputs/apk/release/*arm64-v8a*.apk
           if-no-files-found: error
           retention-days: 7
