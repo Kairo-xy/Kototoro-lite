@@ -140,7 +140,7 @@ class ReaderSuperResolutionManager @Inject constructor(
 
     private suspend fun initEngineIfNeeded(modelId: String) {
         if (activeModelId == modelId) {
-            if (realesrganEngine != null || realcuganEngine != null || anime4kEngine != null) return
+            if (anime4kEngine != null) return
         }
 
         releaseEngines()
