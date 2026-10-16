@@ -425,11 +425,9 @@
 	</string-array>
 	<string-array name="reader_super_resolution_engines" translatable="false">
 		<item>Anime4K (Fast Shaders)</item>
-		<item>RealCUGAN / RealESRGAN (NCNN)</item>
 	</string-array>
 	<string-array name="values_reader_super_resolution_engines" translatable="false">
 		<item>ANIME4K</item>
-		<item>NCNN</item>
 	</string-array>
 	<string-array name="reader_super_resolution_models" translatable="false">
 		<item>@string/reader_super_resolution_model_se</item>
