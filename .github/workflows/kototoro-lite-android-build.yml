@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - devel
-      - chatgpt/kototoro-lite-first-pass
   pull_request:
     branches:
       - devel
