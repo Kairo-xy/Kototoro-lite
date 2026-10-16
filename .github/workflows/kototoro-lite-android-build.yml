@@ -22,33 +22,24 @@ jobs:
     name: Assemble ARM64 debug APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
-
     steps:
       - name: Check out source
         uses: actions/checkout@v4
-
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
-          # The action's default package list includes the obsolete `tools` package.
-          # Install platform-tools explicitly; Gradle resolves the project's SDK platforms/build-tools.
           packages: 'platform-tools'
-
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
-
       - name: Make Gradle wrapper executable
         run: chmod +x ./gradlew
-
       - name: Assemble debug APK
         run: ./gradlew --no-daemon :app:assembleDebug
-
       - name: Verify native libraries match ARM64 target
         if: success()
         shell: bash
@@ -62,33 +53,9 @@ jobs:
           fi
           for apk in "${apks[@]}"; do
             echo "Checking native libraries in $apk"
-            native_entries="$(unzip -Z1 "$apk" | grep -E '^lib/[^/]+/[^/]+\.so        if: success()
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          apks=(app/build/outputs/apk/debug/*.apk)
-          if (( \${#apks[@]} == 0 )); then
-            echo 'No debug APK was produced.' >&2
-            exit 1
-          fi
-          for apk in \"\${apks[@]}\"; do
-            echo \"APK: $apk\"
-            du -h \"$apk\"
-            sha256sum \"$apk\"
-          done
-
-      - name: Upload debug APK
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: kototoro-lite-arm64-debug
-          path: app/build/outputs/apk/debug/*.apk
-          if-no-files-found: error
-          retention-days: 7
- || true)"
+            native_entries="$(unzip -Z1 "$apk" | grep -E '^lib/[^/]+/[^/]+\.so$' || true)"
             if [[ -z "$native_entries" ]]; then
-              echo "No packaged native libraries found; skipping ABI assertion for $apk."
+              echo "No packaged native libraries found in $apk."
               continue
             fi
             printf '%s\n' "$native_entries"
@@ -99,7 +66,6 @@ jobs:
               exit 1
             fi
           done
-
       - name: Summarize largest APK entries
         if: success()
         shell: bash
@@ -109,11 +75,10 @@ jobs:
           apks=(app/build/outputs/apk/debug/*.apk)
           for apk in "${apks[@]}"; do
             echo "Largest entries in $apk (uncompressed sizes):"
-            unzip -l "$apk" | awk 'NF >= 4 && $1 ~ /^[0-9]+$/ { name=$4; size=$1; if (name !~ /^Archive:/ && name != "Name") print size "\t" name }' | sort -nr | head -n 30
+            unzip -l "$apk" | awk 'NF >= 4 && $1 ~ /^[0-9]+$/ { print $1 "\t" $4 }' | sort -nr | sed -n '1,30p'
             echo "Native library totals by ABI:"
             unzip -l "$apk" | awk 'NF >= 4 && $1 ~ /^[0-9]+$/ && $4 ~ /^lib\/[^/]+\/[^/]+\.so$/ { split($4,a,"/"); total[a[2]] += $1 } END { for (abi in total) printf "%s\t%d bytes\n", abi, total[abi] }' | sort
           done
-
       - name: Report APK size and checksum
         if: success()
         shell: bash
@@ -121,16 +86,15 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           apks=(app/build/outputs/apk/debug/*.apk)
-          if (( \${#apks[@]} == 0 )); then
+          if (( ${#apks[@]} == 0 )); then
             echo 'No debug APK was produced.' >&2
             exit 1
           fi
-          for apk in \"\${apks[@]}\"; do
-            echo \"APK: $apk\"
-            du -h \"$apk\"
-            sha256sum \"$apk\"
+          for apk in "${apks[@]}"; do
+            echo "APK: $apk"
+            du -h "$apk"
+            sha256sum "$apk"
           done
-
       - name: Upload debug APK
         if: success()
         uses: actions/upload-artifact@v4
