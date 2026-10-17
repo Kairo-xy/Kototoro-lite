@@ -1,12 +1,13 @@
 name: Kototoro Lite release
 
 # Builds the signed ARM64 release APK and attaches it to a GitHub Release.
-# - Create a release in the GitHub UI (Releases > Draft a new release) with a NEW tag such as
-#   `lite-v0.1.0` targeting this branch: publishing creates the tag, which starts this workflow,
-#   and the signed APK is then attached to that release. Pushing the tag yourself also works
-#   (the release is then created by this workflow), or
+# Ways to start it:
+# - Create a release in the GitHub UI with a NEW tag such as `lite-v0.1.0` (publishing creates the tag), or
+# - push a tag named `lite-v*`, or
+# - push a branch named `release/lite-v*` (the part after `release/` becomes the tag), or
 # - run manually from the Actions tab and enter a tag name
 #   (manual runs only appear in the UI once this file is on the default branch).
+# If a release for the tag already exists the signed APK is attached to it; otherwise one is created.
 # Requires the RELEASE_KEYSTORE_BASE64, RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS and
 # RELEASE_KEY_PASSWORD repository secrets. The `lite-v*` prefix keeps this separate from
 # the upstream `v*` release workflows.
@@ -21,6 +22,8 @@ on:
   push:
     tags:
       - 'lite-v*'
+    branches:
+      - 'release/lite-v*'
 
 permissions:
   contents: write
@@ -33,6 +36,27 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+      - name: Resolve release tag
+        shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          if [[ -n "${INPUT_TAG:-}" ]]; then
+            tag="$INPUT_TAG"
+          elif [[ "$REF_TYPE" == "branch" ]]; then
+            tag="${REF_NAME#release/}"
+          else
+            tag="$REF_NAME"
+          fi
+          if [[ ! "$tag" =~ ^lite-v[0-9A-Za-z._-]+$ ]]; then
+            echo "Refusing to publish: '$tag' is not a lite-v* tag name." >&2
+            exit 1
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "Release tag: $tag"
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -72,8 +96,6 @@ jobs:
         run: ./gradlew --no-daemon --no-parallel :app:assembleRelease
       - name: Prepare release files
         shell: bash
-        env:
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -93,11 +115,10 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            # The release was created in the GitHub UI; attach the signed APK to it.
+            # The release already exists (for example created in the GitHub UI); attach the signed APK to it.
             gh release upload "$TAG" release-files/* --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$TAG" release-files/* \
