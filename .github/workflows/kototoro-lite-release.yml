@@ -1,7 +1,10 @@
 name: Kototoro Lite release
 
 # Builds the signed ARM64 release APK and attaches it to a GitHub Release.
-# - Push a tag like `lite-v0.1.0` to publish from that commit, or
+# - Create a release in the GitHub UI (Releases > Draft a new release) with a NEW tag such as
+#   `lite-v0.1.0` targeting this branch: publishing creates the tag, which starts this workflow,
+#   and the signed APK is then attached to that release. Pushing the tag yourself also works
+#   (the release is then created by this workflow), or
 # - run manually from the Actions tab and enter a tag name
 #   (manual runs only appear in the UI once this file is on the default branch).
 # Requires the RELEASE_KEYSTORE_BASE64, RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS and
@@ -86,16 +89,21 @@ jobs:
           mkdir -p release-files
           cp "${apks[0]}" "release-files/kototoro-lite-${TAG}-arm64.apk"
           (cd release-files && sha256sum ./*.apk | tee SHA256SUMS.txt)
-      - name: Create GitHub Release
+      - name: Publish GitHub Release
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event.inputs.tag || github.ref_name }}
         run: |
           set -euo pipefail
-          gh release create "$TAG" release-files/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
-            --title "Kototoro Lite $TAG" \
-            --notes "ARM64 release build of Kototoro Lite, signed with the project's own key. Installs as org.skepsun.kototoro (the same id as the original app, so it will not install over a copy signed with a different key). SHA-256 checksum is in SHA256SUMS.txt." \
-            --prerelease
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            # The release was created in the GitHub UI; attach the signed APK to it.
+            gh release upload "$TAG" release-files/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" release-files/* \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Kototoro Lite $TAG" \
+              --notes "ARM64 release build of Kototoro Lite, signed with the project's own key. Installs as org.skepsun.kototoro.lite, next to the original Kototoro. SHA-256 checksum is in SHA256SUMS.txt." \
+              --prerelease
+          fi
