@@ -46,7 +46,9 @@ android {
 	}
 
 	defaultConfig {
-		applicationId 'org.skepsun.kototoro'
+		// Kototoro Lite has its own application id so it installs next to the original Kototoro.
+		// The code namespace above intentionally stays org.skepsun.kototoro.
+		applicationId 'org.skepsun.kototoro.lite'
 		minSdk = 26
 		// Phase E: targetSdk 37. Large-screen orientation locks are skipped in
 		// ScreenOrientationHelper to match Android 17 behavior.
