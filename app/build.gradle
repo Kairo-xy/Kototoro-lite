@@ -20,7 +20,7 @@ composeCompiler {
 	stabilityConfigurationFiles.add(layout.projectDirectory.file('compose-stability.conf'))
 }
 
-def allAbiFilters = ['arm64-v8a', 'armeabi-v7a', 'x86_64', 'x86']
+def allAbiFilters = ['arm64-v8a'] // Kototoro Lite: target modern 64-bit Android devices
 def requestedTaskNames = gradle.startParameter.taskNames.collect { it.toLowerCase(Locale.ROOT) }
 def debugOnlyAbiBuild = !requestedTaskNames.isEmpty() &&
 	requestedTaskNames.any { it.contains('debug') } &&
@@ -46,7 +46,9 @@ android {
 	}
 
 	defaultConfig {
-		applicationId 'org.skepsun.kototoro'
+		// Kototoro Lite has its own application id so it installs next to the original Kototoro.
+		// The code namespace above intentionally stays org.skepsun.kototoro.
+		applicationId 'org.skepsun.kototoro.lite'
 		minSdk = 26
 		// Phase E: targetSdk 37. Large-screen orientation locks are skipped in
 		// ScreenOrientationHelper to match Android 17 behavior.
@@ -76,18 +78,6 @@ android {
 			?: 'demo_app_secret').toString()
 		buildConfigField 'String', 'DANDANPLAY_APP_ID', "\"${dandanAppId}\""
 		buildConfigField 'String', 'DANDANPLAY_APP_SECRET', "\"${dandanAppSecret}\""
-		externalNativeBuild {
-			cmake {
-				cppFlags ""
-				abiFilters(*activeAbiFilters)
-			}
-		}
-	}
-	externalNativeBuild {
-		cmake {
-			path "src/main/cpp/CMakeLists.txt"
-			version "3.22.1"
-		}
 	}
 	buildTypes {
 		debug {
@@ -118,7 +108,9 @@ android {
 			enable true
 			reset()
 			include(*activeAbiFilters)
-			universalApk !debugOnlyAbiBuild
+			// Kototoro Lite ships ARM64 only: a universal APK would bundle every ABI
+			// (x86, x86_64, armeabi-v7a) from third-party native libraries.
+			universalApk false
 		}
 	}
 	buildFeatures {
@@ -130,12 +122,13 @@ android {
 	}
 	packaging {
 		jniLibs {
-			useLegacyPackaging = true
+			// Kototoro Lite: keep native libraries inside the APK (loaded straight from it) instead of
+			// extracting a second copy into app storage on install. This cuts the installed size by roughly
+			// the total native library size. Revert to true if a library fails to load at runtime.
+			useLegacyPackaging = false
+			// This fork packages arm64-v8a only; retain only the matching QuickJS collision rule.
 			pickFirsts += [
 				'lib/arm64-v8a/libquickjs.so',
-				'lib/armeabi-v7a/libquickjs.so',
-				'lib/x86/libquickjs.so',
-				'lib/x86_64/libquickjs.so',
 				'**/libc++_shared.so'
 			]
 		}
@@ -582,14 +575,10 @@ dependencies {
 	implementation files('libs/tokenizer-native-0.38.0.aar')
 	implementation cloudstreamRuntimeJar
 	implementation files('libs/jlibtorrent-2.0.12.9.jar')
-	runtimeOnly files('libs/jlibtorrent-android-arm-2.0.12.9.jar')
 	runtimeOnly files('libs/jlibtorrent-android-arm64-2.0.12.9.jar')
-	runtimeOnly files('libs/jlibtorrent-android-x86-2.0.12.9.jar')
-	runtimeOnly files('libs/jlibtorrent-android-x86_64-2.0.12.9.jar')
 	implementation libs.cryptography.core
 	implementation libs.cryptography.provider.optimal
 	implementation libs.djl.sentencepiece
-	implementation 'com.github.akari39:RealCUGAN-ncnn-Android:1.1'
 
 	implementation libs.acra.dialog
 

@@ -2246,7 +2246,11 @@ class AppSettings @Inject constructor(@ApplicationContext private val context: C
         set(value) = prefs.edit().putBoolean(KEY_READER_SUPER_RESOLUTION_ENABLED, value).apply()
 
     val readerSuperResolutionEngine: String
-        get() = prefs.getString(KEY_READER_SUPER_RESOLUTION_ENGINE, "ANIME4K") ?: "ANIME4K"
+        get() {
+            val stored = prefs.getString(KEY_READER_SUPER_RESOLUTION_ENGINE, "ANIME4K") ?: "ANIME4K"
+            // Older builds exposed an NCNN engine that is no longer bundled.
+            return if (stored == "NCNN") "ANIME4K" else stored
+        }
 
     val readerSuperResolutionAnime4kMode: String
         get() = prefs.getString(KEY_READER_SUPER_RESOLUTION_ANIME4K_MODE, "ANIME4K_A") ?: "ANIME4K_A"

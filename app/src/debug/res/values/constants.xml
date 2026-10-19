@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-	<string name="account_type_sync" translatable="false">org.kototoro.debug.sync</string>
-	<string name="sync_authority_history" translatable="false">org.skepsun.kototoro.debug.history</string>
-	<string name="sync_authority_favourites" translatable="false">org.skepsun.kototoro.debug.favourites</string>
+	<string name="account_type_sync" translatable="false">org.kototoro.lite.debug.sync</string>
+	<string name="sync_authority_history" translatable="false">org.skepsun.kototoro.lite.debug.history</string>
+	<string name="sync_authority_favourites" translatable="false">org.skepsun.kototoro.lite.debug.favourites</string>
 </resources>

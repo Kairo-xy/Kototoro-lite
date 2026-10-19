@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+	<!-- Kototoro Lite: unique sync identifiers so the release build can be installed next to the original app. -->
+	<string name="account_type_sync" translatable="false">org.kototoro.lite.sync</string>
+	<string name="sync_authority_history" translatable="false">org.skepsun.kototoro.lite.history</string>
+	<string name="sync_authority_favourites" translatable="false">org.skepsun.kototoro.lite.favourites</string>
+</resources>
