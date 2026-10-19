@@ -7,7 +7,8 @@ name: Kototoro Lite release
 # - push a branch named `release/lite-v*` (the part after `release/` becomes the tag), or
 # - run manually from the Actions tab and enter a tag name
 #   (manual runs only appear in the UI once this file is on the default branch).
-# If a release for the tag already exists the signed APK is attached to it; otherwise one is created.
+# If a release for the tag already exists the signed APK is attached to it; otherwise a DRAFT pre-release is
+# created, which only the repository owner can see until it is published from the Releases page.
 # Requires the RELEASE_KEYSTORE_BASE64, RELEASE_STORE_PASSWORD, RELEASE_KEY_ALIAS and
 # RELEASE_KEY_PASSWORD repository secrets. The `lite-v*` prefix keeps this separate from
 # the upstream `v*` release workflows.
@@ -126,5 +127,6 @@ jobs:
               --target "$GITHUB_SHA" \
               --title "Kototoro Lite $TAG" \
               --notes "ARM64 release build of Kototoro Lite, signed with the project's own key. Installs as org.skepsun.kototoro.lite, next to the original Kototoro. SHA-256 checksum is in SHA256SUMS.txt." \
-              --prerelease
+              --prerelease \
+              --draft
           fi
